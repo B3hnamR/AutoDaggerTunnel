@@ -42,7 +42,7 @@ Offline usage (no GitHub access on Iran server):
 - Upload only `install-iran.sh` to the server
 - Run: `bash install-iran.sh`
 - Script does not run `apt update` or auto-install packages in offline mode
-- If `sshpass` is missing, it automatically works in SSH key-only mode
+- If `sshpass` is missing, it tries `SSH_ASKPASS` fallback (via `setsid`); otherwise it runs in key-only mode
 
 The file is self-contained and does not require any second script.
 
