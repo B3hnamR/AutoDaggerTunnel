@@ -15,6 +15,10 @@ REPO_BRANCH="${AUTO_DAGGER_BRANCH:-main}"
 TUN_LOCAL_CIDR_DEFAULT="10.10.10.1/24"
 TUN_REMOTE_CIDR_DEFAULT="10.10.10.2/24"
 
+HAVE_SSH=0
+HAVE_SCP=0
+HAVE_SSHPASS=0
+
 env_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -49,29 +53,39 @@ require_systemd() {
   fi
 }
 
-install_required_packages() {
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -y
-    DEBIAN_FRONTEND=noninteractive apt-get install -y sshpass openssh-client ca-certificates
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y sshpass openssh-clients ca-certificates
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y sshpass openssh-clients ca-certificates
+ensure_dependencies() {
+  local missing=()
+
+  if command -v ssh >/dev/null 2>&1; then
+    HAVE_SSH=1
   else
-    echo "[ERROR] Unsupported package manager. Install sshpass/openssh-client manually."
+    missing+=("ssh")
+  fi
+
+  if command -v scp >/dev/null 2>&1; then
+    HAVE_SCP=1
+  else
+    missing+=("scp")
+  fi
+
+  if command -v sshpass >/dev/null 2>&1; then
+    HAVE_SSHPASS=1
+  else
+    HAVE_SSHPASS=0
+  fi
+
+  if (( ${#missing[@]} > 0 )); then
+    echo "[ERROR] Offline mode cannot continue on this server."
+    echo "[ERROR] Missing required command(s): ${missing[*]}"
+    echo "[ERROR] Please test on another Iran server or install these tools manually."
     exit 1
   fi
-}
 
-ensure_dependencies() {
-  local missing=false
-  command -v sshpass >/dev/null 2>&1 || missing=true
-  command -v ssh >/dev/null 2>&1 || missing=true
-  command -v scp >/dev/null 2>&1 || missing=true
-
-  if [[ "${missing}" == "true" ]]; then
-    echo "[INFO] Installing required packages..."
-    install_required_packages
+  if (( HAVE_SSHPASS == 1 )); then
+    echo "[INFO] Auth capability: SSH key + password (sshpass detected)."
+  else
+    echo "[WARN] Auth capability: SSH key only (sshpass not found)."
+    echo "[WARN] Password-based servers will fail on this host unless sshpass exists."
   fi
 }
 
@@ -207,7 +221,9 @@ list_servers_table() {
   echo "Saved servers:"
   while IFS=$'\t' read -r server_id name host port user password; do
     [[ -n "${server_id:-}" ]] || continue
-    echo "- ID ${server_id} | ${name} | ${host}:${port} | user=${user}"
+    local auth_mode="key"
+    [[ -n "${password:-}" ]] && auth_mode="password"
+    echo "- ID ${server_id} | ${name} | ${host}:${port} | user=${user} | auth=${auth_mode}"
   done < "${SERVERS_FILE}"
 }
 
@@ -259,6 +275,15 @@ ssh_options() {
   echo "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
 }
 
+auth_capability_check() {
+  local password="$1"
+  if [[ -n "${password}" && "${HAVE_SSHPASS}" -ne 1 ]]; then
+    echo "AUTH_ERROR:sshpass_not_found_for_password_auth"
+    return 1
+  fi
+  return 0
+}
+
 run_ssh_command() {
   local host="$1"
   local port="$2"
@@ -267,9 +292,16 @@ run_ssh_command() {
   local command="$5"
   local -a opts
   IFS=' ' read -r -a opts <<< "$(ssh_options)"
-
-  with_timeout "${SSH_COMMAND_TIMEOUT}" \
-    sshpass -p "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "${command}"
+  if [[ -n "${password}" ]]; then
+    if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+      return 97
+    fi
+    with_timeout "${SSH_COMMAND_TIMEOUT}" \
+      sshpass -p "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "${command}"
+  else
+    with_timeout "${SSH_COMMAND_TIMEOUT}" \
+      ssh "${opts[@]}" -o BatchMode=yes -p "${port}" "${user}@${host}" "${command}"
+  fi
 }
 
 run_remote_script() {
@@ -279,9 +311,16 @@ run_remote_script() {
   local password="$4"
   local -a opts
   IFS=' ' read -r -a opts <<< "$(ssh_options)"
-
-  with_timeout "${SSH_COMMAND_TIMEOUT}" \
-    sshpass -p "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "bash -s"
+  if [[ -n "${password}" ]]; then
+    if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+      return 97
+    fi
+    with_timeout "${SSH_COMMAND_TIMEOUT}" \
+      sshpass -p "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "bash -s"
+  else
+    with_timeout "${SSH_COMMAND_TIMEOUT}" \
+      ssh "${opts[@]}" -o BatchMode=yes -p "${port}" "${user}@${host}" "bash -s"
+  fi
 }
 
 scp_to_remote() {
@@ -293,9 +332,16 @@ scp_to_remote() {
   local password="$6"
   local -a opts
   IFS=' ' read -r -a opts <<< "$(ssh_options)"
-
-  with_timeout "${SSH_COMMAND_TIMEOUT}" \
-    sshpass -p "${password}" scp "${opts[@]}" -P "${port}" "${local_file}" "${user}@${host}:${remote_path}"
+  if [[ -n "${password}" ]]; then
+    if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+      return 97
+    fi
+    with_timeout "${SSH_COMMAND_TIMEOUT}" \
+      sshpass -p "${password}" scp "${opts[@]}" -P "${port}" "${local_file}" "${user}@${host}:${remote_path}"
+  else
+    with_timeout "${SSH_COMMAND_TIMEOUT}" \
+      scp "${opts[@]}" -o BatchMode=yes -P "${port}" "${local_file}" "${user}@${host}:${remote_path}"
+  fi
 }
 
 ssh_connectivity_check() {
@@ -462,12 +508,12 @@ add_server() {
     user="root"
   fi
 
-  read -r -s -p "SSH password: " password
-  echo
-  if [[ -z "${password}" ]]; then
-    echo "[ERROR] Password cannot be empty."
-    press_enter
-    return
+  if (( HAVE_SSHPASS == 1 )); then
+    read -r -s -p "SSH password (optional, leave empty for key auth): " password
+    echo
+  else
+    password=""
+    echo "[WARN] sshpass not found on this host. This server will use SSH key authentication."
   fi
 
   next_id="$(next_server_id)"
@@ -537,9 +583,27 @@ edit_server() {
     user="root"
   fi
 
-  read -r -s -p "SSH password [keep current if empty]: " password
-  echo
-  password="${password:-${old_password}}"
+  if (( HAVE_SSHPASS == 1 )); then
+    read -r -s -p "SSH password [keep current if empty, '-' to clear and use key auth]: " password
+    echo
+    if [[ "${password}" == "-" ]]; then
+      password=""
+    else
+      password="${password:-${old_password}}"
+    fi
+  else
+    if [[ -n "${old_password}" ]]; then
+      echo "[WARN] Stored password exists but sshpass is not available on this host."
+      read -r -p "Clear stored password and switch this server to key auth? [Y/n]: " clear_pw
+      if [[ ! "${clear_pw}" =~ ^[Nn]$ ]]; then
+        password=""
+      else
+        password="${old_password}"
+      fi
+    else
+      password=""
+    fi
+  fi
 
   update_server_record "${server_id}" "${name}" "${host}" "${port}" "${user}" "${password}"
   echo "[OK] Server updated."
@@ -1063,6 +1127,11 @@ apply_quantummux_to_one() {
   local user="$4"
   local password="$5"
 
+  if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+    echo "AUTH_ERROR:sshpass_not_found_for_password_auth"
+    return 1
+  fi
+
   if ! ssh_connectivity_check "${host}" "${port}" "${user}" "${password}" >/dev/null 2>&1; then
     echo "SSH_ERROR:ssh_connect_failed"
     return 1
@@ -1113,6 +1182,11 @@ apply_tun_bip_to_one() {
   local port="$3"
   local user="$4"
   local password="$5"
+
+  if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+    echo "AUTH_ERROR:sshpass_not_found_for_password_auth"
+    return 1
+  fi
 
   if ! ssh_connectivity_check "${host}" "${port}" "${user}" "${password}" >/dev/null 2>&1; then
     echo "SSH_ERROR:ssh_connect_failed"
@@ -1247,6 +1321,12 @@ service_action_all() {
     index=$((index + 1))
     echo "[${index}/${total}] ${name} (${host}:${port}) ..."
 
+    if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+      failed=$((failed + 1))
+      echo "  [FAIL] auth_error:sshpass_not_found_for_password_auth"
+      continue
+    fi
+
     if ! ssh_connectivity_check "${host}" "${port}" "${user}" "${password}" >/dev/null 2>&1; then
       failed=$((failed + 1))
       echo "  [FAIL] ssh_connect_failed"
@@ -1282,6 +1362,11 @@ status_all_servers() {
   while IFS=$'\t' read -r server_id name host port user password; do
     [[ -n "${server_id:-}" ]] || continue
     printf "%s (%s:%s): " "${name}" "${host}" "${port}"
+
+    if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+      echo "AUTH_ERROR (sshpass missing for password auth)"
+      continue
+    fi
 
     if ! ssh_connectivity_check "${host}" "${port}" "${user}" "${password}" >/dev/null 2>&1; then
       echo "SSH_ERROR"
@@ -1321,6 +1406,11 @@ main_menu() {
     echo "12) Exit"
     echo
     echo "Current config: tunnel_port=${TUNNEL_PORT}, protocol=${MAP_PROTOCOL}, map_port=${MAP_PORT}, auto_optimize=${AUTO_OPTIMIZE}"
+    if (( HAVE_SSHPASS == 1 )); then
+      echo "Auth mode on this host: key + password"
+    else
+      echo "Auth mode on this host: key only (sshpass not found)"
+    fi
     echo
 
     local choice
