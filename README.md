@@ -35,7 +35,16 @@ This opens the manager menu.
 bash <(curl -fsSL https://raw.githubusercontent.com/B3hnamR/AutoDaggerTunnel/main/install-iran.sh)
 ```
 
-This opens an interactive terminal manager for Iran-side server automation:
+This opens an interactive terminal manager for Iran-side server automation.
+
+Offline usage (no GitHub access on Iran server):
+
+- Upload only `install-iran.sh` to the server
+- Run: `bash install-iran.sh`
+
+The file is self-contained and does not require any second script.
+
+Features:
 
 - Save / edit / delete server SSH entries
 - Set shared config (tunnel port, PSK, protocol, mapping port)
