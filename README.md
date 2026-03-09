@@ -7,15 +7,17 @@ Telegram bot for automated DaggerConnect client deployment/testing on your outbo
 - Save outbound servers (name, host, ssh user, ssh password)
 - List / edit / delete saved servers
 - Start a tunnel test for a target `IP:PORT`
+- Start tunnel tests for one or multiple targets (`IP:PORT` queue)
 - For each saved server:
   - SSH connect
   - Install/update DaggerConnect binary
   - Write `/etc/DaggerConnect/client.yaml` with given target
   - Write systemd client service
-  - Start service and stream live logs into Telegram
+  - Start service and stream live diagnostic events into Telegram
   - Detect known failure pattern (disconnect/reconnect/streams=0 or oom-kill)
   - If failure pattern is detected: cleanup client config/service automatically
 - Send per-server report + final summary
+  - End summary includes successful servers per target
 
 ## One-line install on Linux server
 

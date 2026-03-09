@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Deque, Optional, Tuple
+from typing import Deque, Optional, Tuple
 
 import asyncssh
 from dotenv import load_dotenv
@@ -39,11 +38,33 @@ EDIT_SELECT_ID, EDIT_NAME, EDIT_HOST, EDIT_USERNAME, EDIT_PASSWORD = range(4, 9)
 DELETE_SELECT_ID = 9
 TEST_TARGET = 10
 
-BTN_TEST = "🚀 Start Tunnel Test"
-BTN_ADD = "➕ Add Server"
-BTN_LIST = "📋 List Servers"
-BTN_EDIT = "✏️ Edit Server"
-BTN_DELETE = "🗑️ Delete Server"
+ICON_OK = "\u2705"
+ICON_WARN = "\u26A0\ufe0f"
+ICON_FAIL = "\u274C"
+ICON_INFO = "\u2139\ufe0f"
+ICON_WAIT = "\u23F3"
+ICON_ROCKET = "\U0001F680"
+ICON_ADD = "\u2795"
+ICON_LIST = "\U0001F4CB"
+ICON_EDIT = "\u270F\ufe0f"
+ICON_DELETE = "\U0001F5D1\ufe0f"
+ICON_TARGET = "\U0001F3AF"
+ICON_RADAR = "\U0001F6F0\ufe0f"
+ICON_CHART = "\U0001F4CA"
+ICON_SEARCH = "\U0001F50E"
+ICON_LOCK = "\U0001F510"
+ICON_USER = "\U0001F464"
+ICON_PC = "\U0001F5A5\ufe0f"
+ICON_NOTE = "\U0001F9FE"
+ICON_SWITCH = "\u21A9\ufe0f"
+ICON_CANCEL = "\U0001F6D1"
+ICON_ID = "\U0001F194"
+
+BTN_TEST = f"{ICON_ROCKET} Start Tunnel Test"
+BTN_ADD = f"{ICON_ADD} Add Server"
+BTN_LIST = f"{ICON_LIST} List Servers"
+BTN_EDIT = f"{ICON_EDIT} Edit Server"
+BTN_DELETE = f"{ICON_DELETE} Delete Server"
 MENU_BUTTONS = (BTN_TEST, BTN_ADD, BTN_LIST, BTN_EDIT, BTN_DELETE)
 MENU_BUTTON_PATTERN = "^(" + "|".join(re.escape(item) for item in MENU_BUTTONS) + ")$"
 MENU_BUTTON_FILTER = filters.Regex(MENU_BUTTON_PATTERN)
@@ -56,6 +77,7 @@ MENU = ReplyKeyboardMarkup(
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 TARGET_RE = re.compile(r"^[^\s:]+:\d{1,5}$")
+ATTEMPT_RE = re.compile(r"attempt #(\d+)", re.IGNORECASE)
 
 
 @dataclass
@@ -65,36 +87,57 @@ class ParsedHost:
 
 
 class LiveLogMessage:
-    def __init__(self, app: Application, chat_id: int, title: str) -> None:
+    def __init__(self, app: Application, chat_id: int, title: str, target: str) -> None:
         self.app = app
         self.chat_id = chat_id
         self.title = title
+        self.target = target
         self.message_id: Optional[int] = None
-        self.lines: Deque[str] = deque(maxlen=18)
         self.last_flush = 0.0
+        self.started_at = time.monotonic()
+        self.events: Deque[str] = deque(maxlen=14)
+        self.connected_count = 0
+        self.disconnected_count = 0
+        self.reconnect_count = 0
+        self.streams_zero_count = 0
+        self.oom_count = 0
 
     async def start(self) -> None:
-        msg = await self.app.bot.send_message(
-            chat_id=self.chat_id,
-            text=f"[{self.title}] Live log started...",
-        )
+        msg = await self.app.bot.send_message(chat_id=self.chat_id, text=self._render())
         self.message_id = msg.message_id
 
     async def push(self, line: str) -> None:
-        self.lines.append(self._trim_line(line))
+        event = self._extract_event(line)
+        if event is None:
+            return
+
+        event_type, event_text = event
+        if event_type == "connected":
+            self.connected_count += 1
+        elif event_type == "disconnected":
+            self.disconnected_count += 1
+        elif event_type == "reconnect":
+            self.reconnect_count += 1
+        elif event_type == "streams_zero":
+            self.streams_zero_count += 1
+        elif event_type == "oom":
+            self.oom_count += 1
+
+        self.events.append(event_text)
+
         now = time.monotonic()
-        if now - self.last_flush >= 2.0:
+        if now - self.last_flush >= 1.4:
             await self.flush()
 
     async def flush(self, force: bool = False) -> None:
         if self.message_id is None:
             return
+
         now = time.monotonic()
-        if not force and now - self.last_flush < 1.0:
+        if not force and now - self.last_flush < 0.8:
             return
 
-        log_text = "\n".join(self.lines) if self.lines else "(no log lines yet)"
-        text = f"[{self.title}] Live logs\n\n{log_text}"
+        text = self._render()
         if len(text) > 3900:
             text = text[-3900:]
 
@@ -110,13 +153,54 @@ class LiveLogMessage:
                 logger.warning("Live log update failed: %s", exc)
 
     async def close(self, footer: str) -> None:
-        self.lines.append(footer)
+        self.events.append(footer)
         await self.flush(force=True)
 
-    @staticmethod
-    def _trim_line(line: str) -> str:
-        clean = line.replace("\t", " ").strip()
-        return clean[:220]
+    def _render(self) -> str:
+        elapsed = int(time.monotonic() - self.started_at)
+
+        lines = [
+            f"{ICON_RADAR} {self.title}",
+            f"{ICON_TARGET} Target: {self.target}",
+            (
+                f"{ICON_CHART} Signals: connected={self.connected_count} | "
+                f"disconnected={self.disconnected_count} | reconnect={self.reconnect_count} | "
+                f"streams_zero={self.streams_zero_count} | oom={self.oom_count}"
+            ),
+            f"{ICON_INFO} Elapsed: {elapsed}s",
+            "",
+            "Detected events:",
+        ]
+
+        if self.events:
+            lines.extend(f"- {item}" for item in self.events)
+        else:
+            lines.append("- waiting for diagnostic events...")
+
+        return "\n".join(lines)
+
+    def _extract_event(self, line: str) -> Optional[Tuple[str, str]]:
+        lower = line.lower()
+
+        if "oom-kill" in lower or "failed with result 'oom-kill'" in lower:
+            return "oom", "OOM_KILL detected"
+
+        if "] connected " in lower:
+            return "connected", "CONNECTED detected"
+
+        if "] disconnected " in lower:
+            return "disconnected", "DISCONNECTED detected"
+
+        if "reconnect in" in lower:
+            attempt = ATTEMPT_RE.search(line)
+            if attempt:
+                return "reconnect", f"RECONNECT detected (attempt #{attempt.group(1)})"
+            return "reconnect", "RECONNECT detected"
+
+        if "streams=0" in lower:
+            return "streams_zero", "STREAMS_ZERO detected"
+
+        return None
 
 
 def get_settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
@@ -125,10 +209,6 @@ def get_settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
 
 def get_store(context: ContextTypes.DEFAULT_TYPE) -> ServerStore:
     return context.application.bot_data["store"]
-
-
-def get_tester(context: ContextTypes.DEFAULT_TYPE) -> DaggerSshTester:
-    return context.application.bot_data["tester"]
 
 
 def get_active_chats(context: ContextTypes.DEFAULT_TYPE) -> set[int]:
@@ -148,7 +228,7 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
         return True
 
     await update.effective_message.reply_text(
-        f"Access denied. Your user id: {user.id}",
+        f"{ICON_FAIL} Access denied. Your user id: {user.id}",
         reply_markup=MENU,
     )
     return False
@@ -165,7 +245,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         else "Mode: public"
     )
     text = (
-        "✅ AutoDagger Tunnel bot is online.\n"
+        f"{ICON_OK} AutoDagger Tunnel bot is online.\n"
         f"{mode_line}\n"
         "Use the menu buttons below."
     )
@@ -177,16 +257,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     text = (
-        "📘 Commands:\n"
+        "Commands:\n"
         "/start - show menu\n"
         "/whoami - show your telegram user id\n"
         "/cancel - cancel current action\n"
         "\n"
-        "⚙️ Flow:\n"
-        "1) Add your outbound servers\n"
-        "2) Press 'Start Tunnel Test'\n"
-        "3) Enter target server address:port\n"
-        "4) Bot runs checks on all saved servers and streams logs"
+        "Flow:\n"
+        "1) Add outbound servers\n"
+        "2) Start tunnel test\n"
+        "3) Enter one or more target address:port values\n"
+        "4) Bot runs checks in queue and sends per-target summaries"
     )
     await update.effective_message.reply_text(text, reply_markup=MENU)
 
@@ -195,7 +275,7 @@ async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     if user is None:
         return
-    await update.effective_message.reply_text(f"🆔 Your Telegram user id: {user.id}", reply_markup=MENU)
+    await update.effective_message.reply_text(f"{ICON_ID} Your Telegram user id: {user.id}", reply_markup=MENU)
 
 
 def parse_host_input(raw: str) -> Optional[ParsedHost]:
@@ -224,6 +304,26 @@ def validate_target(raw: str) -> bool:
     _, port_s = raw.rsplit(":", 1)
     port = int(port_s)
     return 1 <= port <= 65535
+
+
+def parse_targets_input(raw: str) -> tuple[list[str], list[str]]:
+    tokens = [item.strip() for item in re.split(r"[,;\s]+", raw.strip()) if item.strip()]
+
+    unique_targets: list[str] = []
+    invalid_targets: list[str] = []
+    seen: set[str] = set()
+
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+
+        if validate_target(token):
+            unique_targets.append(token)
+        else:
+            invalid_targets.append(token)
+
+    return unique_targets, invalid_targets
 
 
 def compact_error(exc: Exception) -> str:
@@ -264,9 +364,9 @@ async def run_ssh_connectivity_check(
 async def list_servers_text(store: ServerStore) -> str:
     servers = store.list_servers()
     if not servers:
-        return "📭 No servers saved yet."
+        return f"{ICON_LIST} No servers saved yet."
 
-    lines = ["📋 Saved servers:"]
+    lines = [f"{ICON_LIST} Saved servers:"]
     for item in servers:
         lines.append(f"- ID {item.id} | {item.name} | {item.host}:{item.port} | user={item.username}")
     return "\n".join(lines)
@@ -282,30 +382,30 @@ async def list_servers_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await check_access(update, context):
         return ConversationHandler.END
-    await update.effective_message.reply_text("➕ Send server name (letters, numbers, -, _)")
+    await update.effective_message.reply_text(f"{ICON_ADD} Send server name (letters, numbers, -, _)")
     return ADD_NAME
 
 
 async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.effective_message.text.strip()
     if not NAME_RE.match(text):
-        await update.effective_message.reply_text("⚠️ Invalid name. Example: server-de-1")
+        await update.effective_message.reply_text(f"{ICON_WARN} Invalid name. Example: server-de-1")
         return ADD_NAME
 
     context.user_data["add_name"] = text
-    await update.effective_message.reply_text("🌐 Send host or host:port (example: 1.2.3.4 or 1.2.3.4:22)")
+    await update.effective_message.reply_text("Send host or host:port (example: 1.2.3.4 or 1.2.3.4:22)")
     return ADD_HOST
 
 
 async def add_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     parsed = parse_host_input(update.effective_message.text)
     if parsed is None:
-        await update.effective_message.reply_text("⚠️ Invalid host format. Try again.")
+        await update.effective_message.reply_text(f"{ICON_WARN} Invalid host format. Try again.")
         return ADD_HOST
 
     context.user_data["add_host"] = parsed.host
     context.user_data["add_port"] = parsed.port
-    await update.effective_message.reply_text("👤 Send SSH username (default: root). Send '-' to use root.")
+    await update.effective_message.reply_text(f"{ICON_USER} Send SSH username (default: root). Send '-' to use root.")
     return ADD_USERNAME
 
 
@@ -313,14 +413,14 @@ async def add_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     raw = update.effective_message.text.strip()
     username = "root" if raw in {"", "-"} or raw.lower() == "root" else raw
     context.user_data["add_username"] = username
-    await update.effective_message.reply_text("🔐 Send SSH password")
+    await update.effective_message.reply_text(f"{ICON_LOCK} Send SSH password")
     return ADD_PASSWORD
 
 
 async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     password = update.effective_message.text
     if not password:
-        await update.effective_message.reply_text("⚠️ Password cannot be empty.")
+        await update.effective_message.reply_text(f"{ICON_WARN} Password cannot be empty.")
         return ADD_PASSWORD
 
     store = get_store(context)
@@ -336,7 +436,8 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     await update.effective_message.reply_text(
-        f"✅ Server saved. ID={server_id}, target={host}:{port}\n🔎 Running SSH connectivity check...",
+        f"{ICON_OK} Server saved. ID={server_id}, target={host}:{port}\n"
+        f"{ICON_SEARCH} Running SSH connectivity check...",
     )
 
     settings = get_settings(context)
@@ -349,18 +450,15 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
 
     if check_ok:
-        check_text = "✅ SSH check: SUCCESS (connected)."
+        check_text = f"{ICON_OK} SSH check: SUCCESS (connected)."
     else:
         check_text = (
-            "❌ SSH check: FAILED.\n"
+            f"{ICON_FAIL} SSH check: FAILED.\n"
             f"Reason: {check_detail}\n"
             "Server is still saved (as requested)."
         )
 
-    await update.effective_message.reply_text(
-        check_text,
-        reply_markup=MENU,
-    )
+    await update.effective_message.reply_text(check_text, reply_markup=MENU)
     return ConversationHandler.END
 
 
@@ -370,19 +468,19 @@ async def edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     text = await list_servers_text(get_store(context))
     await update.effective_message.reply_text(text)
-    await update.effective_message.reply_text("✏️ Send server ID to edit")
+    await update.effective_message.reply_text(f"{ICON_EDIT} Send server ID to edit")
     return EDIT_SELECT_ID
 
 
 async def edit_select_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.effective_message.text.strip()
     if not raw.isdigit():
-        await update.effective_message.reply_text("⚠️ Invalid ID. Send a number.")
+        await update.effective_message.reply_text(f"{ICON_WARN} Invalid ID. Send a number.")
         return EDIT_SELECT_ID
 
     server = get_store(context).get_server(int(raw))
     if server is None:
-        await update.effective_message.reply_text("⚠️ Server not found. Try another ID.")
+        await update.effective_message.reply_text(f"{ICON_WARN} Server not found. Try another ID.")
         return EDIT_SELECT_ID
 
     context.user_data["edit_server"] = server
@@ -400,7 +498,7 @@ async def edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         name = server.name
     else:
         if not NAME_RE.match(raw):
-            await update.effective_message.reply_text("⚠️ Invalid name. Try again.")
+            await update.effective_message.reply_text(f"{ICON_WARN} Invalid name. Try again.")
             return EDIT_NAME
         name = raw
 
@@ -421,7 +519,7 @@ async def edit_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         parsed = parse_host_input(raw)
         if parsed is None:
-            await update.effective_message.reply_text("⚠️ Invalid host format. Try again.")
+            await update.effective_message.reply_text(f"{ICON_WARN} Invalid host format. Try again.")
             return EDIT_HOST
         host = parsed.host
         port = parsed.port
@@ -442,7 +540,7 @@ async def edit_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         username = "root"
 
     if not username:
-        await update.effective_message.reply_text("⚠️ Username cannot be empty.")
+        await update.effective_message.reply_text(f"{ICON_WARN} Username cannot be empty.")
         return EDIT_USERNAME
 
     context.user_data["edit_username"] = username
@@ -457,7 +555,9 @@ async def edit_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     raw = update.effective_message.text
     password = None if raw.strip() == "-" else raw
     if password == "":
-        await update.effective_message.reply_text("⚠️ Password cannot be empty. Use '-' to keep current password.")
+        await update.effective_message.reply_text(
+            f"{ICON_WARN} Password cannot be empty. Use '-' to keep current password."
+        )
         return EDIT_PASSWORD
 
     try:
@@ -474,10 +574,10 @@ async def edit_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     if not ok:
-        await update.effective_message.reply_text("⚠️ Server no longer exists.", reply_markup=MENU)
+        await update.effective_message.reply_text(f"{ICON_WARN} Server no longer exists.", reply_markup=MENU)
         return ConversationHandler.END
 
-    await update.effective_message.reply_text("✅ Server updated.", reply_markup=MENU)
+    await update.effective_message.reply_text(f"{ICON_OK} Server updated.", reply_markup=MENU)
     return ConversationHandler.END
 
 
@@ -487,21 +587,21 @@ async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     text = await list_servers_text(get_store(context))
     await update.effective_message.reply_text(text)
-    await update.effective_message.reply_text("🗑️ Send server ID to delete")
+    await update.effective_message.reply_text(f"{ICON_DELETE} Send server ID to delete")
     return DELETE_SELECT_ID
 
 
 async def delete_pick_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.effective_message.text.strip()
     if not raw.isdigit():
-        await update.effective_message.reply_text("⚠️ Invalid ID. Send a number.")
+        await update.effective_message.reply_text(f"{ICON_WARN} Invalid ID. Send a number.")
         return DELETE_SELECT_ID
 
     ok = get_store(context).delete_server(int(raw))
     if ok:
-        await update.effective_message.reply_text("✅ Server deleted.", reply_markup=MENU)
+        await update.effective_message.reply_text(f"{ICON_OK} Server deleted.", reply_markup=MENU)
     else:
-        await update.effective_message.reply_text("⚠️ Server not found.", reply_markup=MENU)
+        await update.effective_message.reply_text(f"{ICON_WARN} Server not found.", reply_markup=MENU)
     return ConversationHandler.END
 
 
@@ -513,89 +613,119 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     if chat_id in active_chats:
         await update.effective_message.reply_text(
-            "⏳ A test is already running in this chat. Wait until it finishes.",
+            f"{ICON_WAIT} A test is already running in this chat. Wait until it finishes.",
             reply_markup=MENU,
         )
         return ConversationHandler.END
 
     if not get_store(context).list_servers():
-        await update.effective_message.reply_text("📭 No servers saved yet. Add server first.", reply_markup=MENU)
+        await update.effective_message.reply_text(f"{ICON_LIST} No servers saved yet. Add server first.", reply_markup=MENU)
         return ConversationHandler.END
 
-    await update.effective_message.reply_text("🎯 Send target server address:port (example: 64.176.186.228:443)")
+    await update.effective_message.reply_text(
+        f"{ICON_TARGET} Send one or multiple target address:port values.\n"
+        "Examples:\n"
+        "- 94.183.180.8:443\n"
+        "- 94.183.180.8:443, 66.33.88.10:8443"
+    )
     return TEST_TARGET
 
 
 async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    target = update.effective_message.text.strip()
-    if not validate_target(target):
-        await update.effective_message.reply_text("⚠️ Invalid address:port format. Try again.")
+    raw_input = update.effective_message.text.strip()
+    targets, invalid = parse_targets_input(raw_input)
+
+    if invalid:
+        bad = ", ".join(invalid[:6])
+        await update.effective_message.reply_text(
+            f"{ICON_WARN} Invalid target(s): {bad}\nUse format IP:PORT and try again."
+        )
+        return TEST_TARGET
+
+    if not targets:
+        await update.effective_message.reply_text(f"{ICON_WARN} No valid target found. Try again.")
         return TEST_TARGET
 
     chat_id = update.effective_chat.id
     get_active_chats(context).add(chat_id)
 
     await update.effective_message.reply_text(
-        f"🚀 Test started for target {target}. Live logs will be streamed here.",
+        f"{ICON_ROCKET} Queue started for {len(targets)} target(s). Live diagnostic updates will be shown.",
         reply_markup=MENU,
     )
 
-    context.application.create_task(run_test_batch(context.application, chat_id, target))
+    context.application.create_task(run_target_queue(context.application, chat_id, targets))
     return ConversationHandler.END
 
 
-async def run_test_batch(app: Application, chat_id: int, target: str) -> None:
+async def run_target_queue(app: Application, chat_id: int, targets: list[str]) -> None:
     store: ServerStore = app.bot_data["store"]
     settings: Settings = app.bot_data["settings"]
     tester: DaggerSshTester = app.bot_data["tester"]
     active_chats: set[int] = app.bot_data["active_chats"]
 
-    results: list[ServerTestResult] = []
     servers = store.list_servers()
+    batches: list[tuple[str, list[ServerTestResult]]] = []
 
     try:
-        for idx, server in enumerate(servers, start=1):
-            title = f"{idx}/{len(servers)} {server.name} {server.host}:{server.port}"
-            live = LiveLogMessage(app, chat_id, title)
-            await live.start()
-
-            async def on_line(line: str) -> None:
-                await live.push(line)
-
-            result = await tester.test_server(
-                server,
-                target_addr=target,
-                psk=settings.default_psk,
-                on_log_line=on_line,
+        for target_index, target in enumerate(targets, start=1):
+            await app.bot.send_message(
+                chat_id=chat_id,
+                text=f"{ICON_TARGET} Target queue item {target_index}/{len(targets)}: {target}",
             )
-            results.append(result)
 
-            if result.status == TestStatus.FAILED_PATTERN:
-                footer = "❌ Result: FAILED pattern detected, config cleaned up."
-            elif result.status == TestStatus.MANUAL_REVIEW:
-                footer = "🟡 Result: UNKNOWN pattern, manual review needed."
-            elif result.status == TestStatus.SSH_ERROR:
-                footer = f"🔴 Result: SSH error ({result.reason})"
-            else:
-                footer = f"🔴 Result: setup/runtime error ({result.reason})"
+            target_results: list[ServerTestResult] = []
 
-            await live.close(footer)
+            for server_index, server in enumerate(servers, start=1):
+                title = (
+                    f"Target {target_index}/{len(targets)} | "
+                    f"Server {server_index}/{len(servers)} | "
+                    f"{server.name} ({server.host}:{server.port})"
+                )
+                live = LiveLogMessage(app, chat_id, title=title, target=target)
+                await live.start()
 
-            per_server_report = format_server_report(result)
-            await app.bot.send_message(chat_id=chat_id, text=per_server_report)
+                async def on_line(line: str) -> None:
+                    await live.push(line)
 
-        final = format_final_report(results)
-        await app.bot.send_message(chat_id=chat_id, text=final)
+                result = await tester.test_server(
+                    server,
+                    target_addr=target,
+                    psk=settings.default_psk,
+                    on_log_line=on_line,
+                )
+                target_results.append(result)
+
+                await live.close(status_footer(result))
+                await app.bot.send_message(chat_id=chat_id, text=format_server_report(result))
+
+            batches.append((target, target_results))
+            await app.bot.send_message(chat_id=chat_id, text=format_target_summary(target, target_results))
+
+        await app.bot.send_message(chat_id=chat_id, text=format_queue_summary(batches))
 
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Batch test failed")
-        await app.bot.send_message(chat_id=chat_id, text=f"Batch crashed: {exc}")
+        logger.exception("Target queue failed")
+        await app.bot.send_message(chat_id=chat_id, text=f"{ICON_FAIL} Queue crashed: {exc}")
     finally:
         active_chats.discard(chat_id)
 
 
+def status_footer(result: ServerTestResult) -> str:
+    if result.status == TestStatus.SUCCESS:
+        return f"{ICON_OK} SUCCESS signal detected"
+    if result.status == TestStatus.FAILED_PATTERN:
+        return f"{ICON_FAIL} FAILED pattern detected (cleanup applied)"
+    if result.status == TestStatus.MANUAL_REVIEW:
+        return f"{ICON_INFO} Manual review required"
+    if result.status == TestStatus.SSH_ERROR:
+        return f"{ICON_FAIL} SSH error"
+    return f"{ICON_FAIL} Setup/runtime error"
+
+
 def format_server_report(result: ServerTestResult) -> str:
     status_map = {
+        TestStatus.SUCCESS: "SUCCESS",
         TestStatus.FAILED_PATTERN: "FAILED_PATTERN",
         TestStatus.MANUAL_REVIEW: "MANUAL_REVIEW",
         TestStatus.SSH_ERROR: "SSH_ERROR",
@@ -603,56 +733,88 @@ def format_server_report(result: ServerTestResult) -> str:
     }
 
     lines = [
-        f"🖥️ Server: {result.server_name} ({result.host}:{result.port})",
-        f"📌 Status: {status_map[result.status]}",
-        f"🧾 Reason: {result.reason}",
+        f"{ICON_PC} Server: {result.server_name} ({result.host}:{result.port})",
+        f"{ICON_TARGET} Target: {result.target_addr}",
+        f"{ICON_NOTE} Status: {status_map[result.status]}",
+        f"{ICON_INFO} Reason: {result.reason}",
         (
-            "📈 Counters: "
+            f"{ICON_CHART} Signals: "
+            f"connected={result.analyzer.connected_count}, "
             f"disconnected={result.analyzer.disconnected_count}, "
             f"reconnect={result.analyzer.reconnect_count}, "
             f"streams_zero={result.analyzer.streams_zero_count}"
         ),
     ]
 
-    if result.log_tail:
-        lines.append("🪵 Log tail:")
-        lines.extend(f"  {line[:160]}" for line in result.log_tail[-8:])
-
     return "\n".join(lines)
 
 
-def format_final_report(results: list[ServerTestResult]) -> str:
+def format_target_summary(target: str, results: list[ServerTestResult]) -> str:
     summary = summarize_results(results)
+    success_servers = [f"{r.server_name} ({r.host})" for r in results if r.status == TestStatus.SUCCESS]
 
     lines = [
-        "✅ Batch completed.",
+        f"{ICON_OK} Target completed: {target}",
         (
-            "📊 Summary: "
+            f"{ICON_CHART} Summary: "
+            f"success={summary['success']} | "
             f"failed_pattern={summary['failed_pattern']} | "
             f"manual_review={summary['manual_review']} | "
             f"ssh_error={summary['ssh_error']} | "
             f"setup_error={summary['setup_error']}"
         ),
-        "",
-        "🧩 Per server:",
     ]
 
-    for item in results:
-        lines.append(f"- {item.server_name} ({item.host}:{item.port}) => {item.status.value} ({item.reason})")
+    if success_servers:
+        lines.append(f"{ICON_OK} Successful servers: " + ", ".join(success_servers))
+    else:
+        lines.append(f"{ICON_FAIL} No successful server detected for this target.")
+
+    return "\n".join(lines)
+
+
+def format_queue_summary(batches: list[tuple[str, list[ServerTestResult]]]) -> str:
+    all_results: list[ServerTestResult] = []
+    for _, batch_results in batches:
+        all_results.extend(batch_results)
+
+    grand = summarize_results(all_results)
+
+    lines = [
+        f"{ICON_OK} Queue completed.",
+        (
+            f"{ICON_CHART} Grand summary: "
+            f"success={grand['success']} | "
+            f"failed_pattern={grand['failed_pattern']} | "
+            f"manual_review={grand['manual_review']} | "
+            f"ssh_error={grand['ssh_error']} | "
+            f"setup_error={grand['setup_error']}"
+        ),
+        "",
+        "Per target successful servers:",
+    ]
+
+    for target, results in batches:
+        success_servers = [r.server_name for r in results if r.status == TestStatus.SUCCESS]
+        if success_servers:
+            lines.append(f"- {target}: " + ", ".join(success_servers))
+        else:
+            lines.append(f"- {target}: none")
 
     return "\n".join(lines)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.effective_message.reply_text("🛑 Cancelled.", reply_markup=MENU)
+    await update.effective_message.reply_text(f"{ICON_CANCEL} Cancelled.", reply_markup=MENU)
     return ConversationHandler.END
 
 
 async def cancel_on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
-        "↩️ Switched to selected menu action.",
+        f"{ICON_SWITCH} Switched to selected menu action.",
         reply_markup=MENU,
     )
+
     text = (update.effective_message.text or "").strip()
     if text == BTN_ADD:
         return await add_start(update, context)

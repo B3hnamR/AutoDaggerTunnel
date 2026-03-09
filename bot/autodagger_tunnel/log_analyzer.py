@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 @dataclass
 class AnalyzerSnapshot:
+    connected_count: int
     disconnected_count: int
     reconnect_count: int
     streams_zero_count: int
@@ -13,6 +14,7 @@ class AnalyzerSnapshot:
 
 class DaggerLogAnalyzer:
     def __init__(self) -> None:
+        self.connected_count = 0
         self.disconnected_count = 0
         self.reconnect_count = 0
         self.streams_zero_count = 0
@@ -23,6 +25,9 @@ class DaggerLogAnalyzer:
 
         if "oom-kill" in lower or "failed with result 'oom-kill'" in lower:
             self.failure_reason = self.failure_reason or "oom_kill_detected"
+
+        if "] connected " in lower:
+            self.connected_count += 1
 
         if "] disconnected " in lower:
             self.disconnected_count += 1
@@ -41,6 +46,7 @@ class DaggerLogAnalyzer:
 
     def snapshot(self) -> AnalyzerSnapshot:
         return AnalyzerSnapshot(
+            connected_count=self.connected_count,
             disconnected_count=self.disconnected_count,
             reconnect_count=self.reconnect_count,
             streams_zero_count=self.streams_zero_count,

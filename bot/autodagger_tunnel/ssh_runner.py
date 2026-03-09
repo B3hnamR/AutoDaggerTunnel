@@ -18,6 +18,7 @@ OnLogLine = Callable[[str], Awaitable[None]]
 
 
 class TestStatus(str, Enum):
+    SUCCESS = "success"
     FAILED_PATTERN = "failed_pattern"
     MANUAL_REVIEW = "manual_review"
     SSH_ERROR = "ssh_error"
@@ -30,9 +31,10 @@ class ServerTestResult:
     server_name: str
     host: str
     port: int
+    target_addr: str
     status: TestStatus
     reason: str
-    analyzer: AnalyzerSnapshot = field(default_factory=lambda: AnalyzerSnapshot(0, 0, 0, ""))
+    analyzer: AnalyzerSnapshot = field(default_factory=lambda: AnalyzerSnapshot(0, 0, 0, 0, ""))
     log_tail: List[str] = field(default_factory=list)
 
 
@@ -65,6 +67,7 @@ class DaggerSshTester:
                 server_name=server.name,
                 host=server.host,
                 port=server.port,
+                target_addr=target_addr,
                 status=TestStatus.SSH_ERROR,
                 reason=f"ssh_connect_failed: {self._compact_error(exc)}",
             )
@@ -96,8 +99,22 @@ class DaggerSshTester:
                     server_name=server.name,
                     host=server.host,
                     port=server.port,
+                    target_addr=target_addr,
                     status=TestStatus.FAILED_PATTERN,
                     reason=f"known_failure_pattern: {snapshot.failure_reason}",
+                    analyzer=snapshot,
+                    log_tail=log_tail,
+                )
+
+            if snapshot.connected_count > 0:
+                return ServerTestResult(
+                    server_id=server.id,
+                    server_name=server.name,
+                    host=server.host,
+                    port=server.port,
+                    target_addr=target_addr,
+                    status=TestStatus.SUCCESS,
+                    reason="connection_detected_without_known_failure_pattern",
                     analyzer=snapshot,
                     log_tail=log_tail,
                 )
@@ -107,8 +124,9 @@ class DaggerSshTester:
                 server_name=server.name,
                 host=server.host,
                 port=server.port,
+                target_addr=target_addr,
                 status=TestStatus.MANUAL_REVIEW,
-                reason="no_known_failure_pattern_detected",
+                reason="no_known_failure_pattern_but_no_connection_signal",
                 analyzer=snapshot,
                 log_tail=log_tail,
             )
@@ -122,6 +140,7 @@ class DaggerSshTester:
                 server_name=server.name,
                 host=server.host,
                 port=server.port,
+                target_addr=target_addr,
                 status=TestStatus.SETUP_ERROR,
                 reason=f"setup_or_runtime_error: {self._compact_error(exc)}",
             )
@@ -237,6 +256,7 @@ class DaggerSshTester:
 
 def summarize_results(results: List[ServerTestResult]) -> Dict[str, int]:
     summary = {
+        "success": 0,
         "failed_pattern": 0,
         "manual_review": 0,
         "ssh_error": 0,
