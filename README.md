@@ -32,6 +32,7 @@ This opens the manager menu.
 - Start / Stop / Restart
 - Status
 - Live logs
+- Update bot now (pull latest + reinstall deps + restart service)
 
 ## Telegram bot access mode
 

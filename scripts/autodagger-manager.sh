@@ -241,6 +241,34 @@ reconfigure_only() {
   fi
 }
 
+update_bot_only() {
+  if [[ ! -d "${APP_DIR}/.git" ]]; then
+    echo "[ERROR] App is not installed yet. Run Install / Update first."
+    read -r -p "Press Enter to continue..." _
+    return
+  fi
+
+  pkg_install
+
+  local before_ref after_ref
+  before_ref="$(git -C "${APP_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+
+  clone_or_update_repo
+  setup_python_env
+
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    echo "[WARN] Env file not found. Please configure bot settings."
+    prompt_config_and_write_env
+  fi
+
+  create_service
+  systemctl restart "${APP_NAME}.service"
+
+  after_ref="$(git -C "${APP_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+  echo "[OK] Bot updated and restarted. Commit: ${before_ref} -> ${after_ref}"
+  read -r -p "Press Enter to continue..." _
+}
+
 start_service() {
   systemctl start "${APP_NAME}.service"
   echo "[OK] Service started."
@@ -296,10 +324,11 @@ main_menu() {
     echo "6) Service status"
     echo "7) Live logs"
     echo "8) Show current config"
-    echo "9) Exit"
+    echo "9) Update bot now (pull + restart)"
+    echo "10) Exit"
     echo
 
-    read -r -p "Select [1-9]: " choice
+    read -r -p "Select [1-10]: " choice
     case "${choice}" in
       1) install_or_update ;;
       2) reconfigure_only ;;
@@ -309,7 +338,8 @@ main_menu() {
       6) status_service ;;
       7) logs_service ;;
       8) show_current_config ;;
-      9) exit 0 ;;
+      9) update_bot_only ;;
+      10) exit 0 ;;
       *)
         echo "Invalid option."
         read -r -p "Press Enter to continue..." _

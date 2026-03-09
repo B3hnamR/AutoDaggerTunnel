@@ -191,8 +191,8 @@ class DaggerSshTester:
             [
                 "set -euo pipefail",
                 f"wget -q -O /tmp/DaggerConnect {shlex.quote(self.settings.dagger_binary_url)}",
-                "chmod +x /tmp/DaggerConnect",
-                "mv /tmp/DaggerConnect /usr/local/bin/DaggerConnect",
+                "install -m 0755 /tmp/DaggerConnect /usr/local/bin/DaggerConnect",
+                "rm -f /tmp/DaggerConnect",
                 "mkdir -p /etc/DaggerConnect",
             ]
         )

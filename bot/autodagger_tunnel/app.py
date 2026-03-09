@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Deque, Optional, Tuple
 
+import asyncssh
 from dotenv import load_dotenv
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.error import BadRequest
@@ -43,6 +44,10 @@ BTN_ADD = "Add Server"
 BTN_LIST = "List Servers"
 BTN_EDIT = "Edit Server"
 BTN_DELETE = "Delete Server"
+MENU_BUTTONS = (BTN_TEST, BTN_ADD, BTN_LIST, BTN_EDIT, BTN_DELETE)
+MENU_BUTTON_PATTERN = "^(" + "|".join(re.escape(item) for item in MENU_BUTTONS) + ")$"
+MENU_BUTTON_FILTER = filters.Regex(MENU_BUTTON_PATTERN)
+STATE_TEXT_FILTER = filters.TEXT & ~filters.COMMAND & ~MENU_BUTTON_FILTER
 
 MENU = ReplyKeyboardMarkup(
     [[BTN_TEST, BTN_ADD], [BTN_LIST, BTN_EDIT], [BTN_DELETE]],
@@ -221,6 +226,41 @@ def validate_target(raw: str) -> bool:
     return 1 <= port <= 65535
 
 
+def compact_error(exc: Exception) -> str:
+    text = str(exc).strip().replace("\n", " | ")
+    return text[:280] if text else exc.__class__.__name__
+
+
+async def run_ssh_connectivity_check(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    connect_timeout: int,
+) -> Tuple[bool, str]:
+    conn: Optional[asyncssh.SSHClientConnection] = None
+    try:
+        conn = await asyncssh.connect(
+            host,
+            port=port,
+            username=username,
+            password=password,
+            known_hosts=None,
+            connect_timeout=connect_timeout,
+        )
+        await conn.run("true", check=True, timeout=max(3, connect_timeout))
+        return True, "ssh_connection_successful"
+    except Exception as exc:  # noqa: BLE001
+        return False, compact_error(exc)
+    finally:
+        if conn is not None:
+            conn.close()
+            try:
+                await conn.wait_closed()
+            except Exception:
+                pass
+
+
 async def list_servers_text(store: ServerStore) -> str:
     servers = store.list_servers()
     if not servers:
@@ -296,7 +336,29 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     await update.effective_message.reply_text(
-        f"Server saved. ID={server_id}, target={host}:{port}",
+        f"Server saved. ID={server_id}, target={host}:{port}\nRunning SSH connectivity check...",
+    )
+
+    settings = get_settings(context)
+    check_ok, check_detail = await run_ssh_connectivity_check(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        connect_timeout=settings.ssh_connect_timeout,
+    )
+
+    if check_ok:
+        check_text = "SSH check: SUCCESS (connected)."
+    else:
+        check_text = (
+            "SSH check: FAILED.\n"
+            f"Reason: {check_detail}\n"
+            "Server is still saved (as requested)."
+        )
+
+    await update.effective_message.reply_text(
+        check_text,
         reply_markup=MENU,
     )
     return ConversationHandler.END
@@ -584,6 +646,19 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+async def cancel_on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.effective_message.reply_text(
+        "Current process was cancelled. Press your desired menu button again.",
+        reply_markup=MENU,
+    )
+    return ConversationHandler.END
+
+
+async def restart_menu_from_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await start_command(update, context)
+    return ConversationHandler.END
+
+
 def build_app() -> Application:
     load_dotenv()
 
@@ -601,48 +676,63 @@ def build_app() -> Application:
     app.bot_data["tester"] = tester
     app.bot_data["active_chats"] = set()
 
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("whoami", whoami_command))
-    app.add_handler(CommandHandler("cancel", cancel))
-
     add_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_ADD)}$"), add_start)],
         states={
-            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
-            ADD_HOST: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_host)],
-            ADD_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_username)],
-            ADD_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_password)],
+            ADD_NAME: [MessageHandler(STATE_TEXT_FILTER, add_name)],
+            ADD_HOST: [MessageHandler(STATE_TEXT_FILTER, add_host)],
+            ADD_USERNAME: [MessageHandler(STATE_TEXT_FILTER, add_username)],
+            ADD_PASSWORD: [MessageHandler(STATE_TEXT_FILTER, add_password)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", restart_menu_from_conversation),
+            MessageHandler(MENU_BUTTON_FILTER, cancel_on_menu_button),
+        ],
+        allow_reentry=True,
     )
 
     edit_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_EDIT)}$"), edit_start)],
         states={
-            EDIT_SELECT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_select_id)],
-            EDIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name)],
-            EDIT_HOST: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_host)],
-            EDIT_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_username)],
-            EDIT_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_password)],
+            EDIT_SELECT_ID: [MessageHandler(STATE_TEXT_FILTER, edit_select_id)],
+            EDIT_NAME: [MessageHandler(STATE_TEXT_FILTER, edit_name)],
+            EDIT_HOST: [MessageHandler(STATE_TEXT_FILTER, edit_host)],
+            EDIT_USERNAME: [MessageHandler(STATE_TEXT_FILTER, edit_username)],
+            EDIT_PASSWORD: [MessageHandler(STATE_TEXT_FILTER, edit_password)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", restart_menu_from_conversation),
+            MessageHandler(MENU_BUTTON_FILTER, cancel_on_menu_button),
+        ],
+        allow_reentry=True,
     )
 
     delete_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_DELETE)}$"), delete_start)],
         states={
-            DELETE_SELECT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_pick_id)],
+            DELETE_SELECT_ID: [MessageHandler(STATE_TEXT_FILTER, delete_pick_id)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", restart_menu_from_conversation),
+            MessageHandler(MENU_BUTTON_FILTER, cancel_on_menu_button),
+        ],
+        allow_reentry=True,
     )
 
     test_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_TEST)}$"), test_start)],
         states={
-            TEST_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, test_receive_target)],
+            TEST_TARGET: [MessageHandler(STATE_TEXT_FILTER, test_receive_target)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", restart_menu_from_conversation),
+            MessageHandler(MENU_BUTTON_FILTER, cancel_on_menu_button),
+        ],
+        allow_reentry=True,
     )
 
     app.add_handler(add_conv)
@@ -650,6 +740,10 @@ def build_app() -> Application:
     app.add_handler(delete_conv)
     app.add_handler(test_conv)
 
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("whoami", whoami_command))
+    app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_LIST)}$"), list_servers_button))
 
     return app
