@@ -20,7 +20,7 @@ Telegram bot for automated DaggerConnect client deployment/testing on your outbo
 ## One-line install on Linux server
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/B3hnamR/AutoDaggerTunnel/main/scripts/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/B3hnamR/AutoDaggerTunnel/main/install.sh)
 ```
 
 This opens the manager menu.
