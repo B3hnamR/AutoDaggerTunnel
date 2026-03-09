@@ -39,11 +39,11 @@ EDIT_SELECT_ID, EDIT_NAME, EDIT_HOST, EDIT_USERNAME, EDIT_PASSWORD = range(4, 9)
 DELETE_SELECT_ID = 9
 TEST_TARGET = 10
 
-BTN_TEST = "Start Tunnel Test"
-BTN_ADD = "Add Server"
-BTN_LIST = "List Servers"
-BTN_EDIT = "Edit Server"
-BTN_DELETE = "Delete Server"
+BTN_TEST = "🚀 Start Tunnel Test"
+BTN_ADD = "➕ Add Server"
+BTN_LIST = "📋 List Servers"
+BTN_EDIT = "✏️ Edit Server"
+BTN_DELETE = "🗑️ Delete Server"
 MENU_BUTTONS = (BTN_TEST, BTN_ADD, BTN_LIST, BTN_EDIT, BTN_DELETE)
 MENU_BUTTON_PATTERN = "^(" + "|".join(re.escape(item) for item in MENU_BUTTONS) + ")$"
 MENU_BUTTON_FILTER = filters.Regex(MENU_BUTTON_PATTERN)
@@ -165,7 +165,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         else "Mode: public"
     )
     text = (
-        "AutoDagger Tunnel bot is online.\n"
+        "✅ AutoDagger Tunnel bot is online.\n"
         f"{mode_line}\n"
         "Use the menu buttons below."
     )
@@ -177,12 +177,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     text = (
-        "Commands:\n"
+        "📘 Commands:\n"
         "/start - show menu\n"
         "/whoami - show your telegram user id\n"
         "/cancel - cancel current action\n"
         "\n"
-        "Flow:\n"
+        "⚙️ Flow:\n"
         "1) Add your outbound servers\n"
         "2) Press 'Start Tunnel Test'\n"
         "3) Enter target server address:port\n"
@@ -195,7 +195,7 @@ async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     if user is None:
         return
-    await update.effective_message.reply_text(f"Your Telegram user id: {user.id}", reply_markup=MENU)
+    await update.effective_message.reply_text(f"🆔 Your Telegram user id: {user.id}", reply_markup=MENU)
 
 
 def parse_host_input(raw: str) -> Optional[ParsedHost]:
@@ -264,9 +264,9 @@ async def run_ssh_connectivity_check(
 async def list_servers_text(store: ServerStore) -> str:
     servers = store.list_servers()
     if not servers:
-        return "No servers saved yet."
+        return "📭 No servers saved yet."
 
-    lines = ["Saved servers:"]
+    lines = ["📋 Saved servers:"]
     for item in servers:
         lines.append(f"- ID {item.id} | {item.name} | {item.host}:{item.port} | user={item.username}")
     return "\n".join(lines)
@@ -282,45 +282,45 @@ async def list_servers_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await check_access(update, context):
         return ConversationHandler.END
-    await update.effective_message.reply_text("Send server name (letters, numbers, -, _)")
+    await update.effective_message.reply_text("➕ Send server name (letters, numbers, -, _)")
     return ADD_NAME
 
 
 async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.effective_message.text.strip()
     if not NAME_RE.match(text):
-        await update.effective_message.reply_text("Invalid name. Example: server-de-1")
+        await update.effective_message.reply_text("⚠️ Invalid name. Example: server-de-1")
         return ADD_NAME
 
     context.user_data["add_name"] = text
-    await update.effective_message.reply_text("Send host or host:port (example: 1.2.3.4 or 1.2.3.4:22)")
+    await update.effective_message.reply_text("🌐 Send host or host:port (example: 1.2.3.4 or 1.2.3.4:22)")
     return ADD_HOST
 
 
 async def add_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     parsed = parse_host_input(update.effective_message.text)
     if parsed is None:
-        await update.effective_message.reply_text("Invalid host format. Try again.")
+        await update.effective_message.reply_text("⚠️ Invalid host format. Try again.")
         return ADD_HOST
 
     context.user_data["add_host"] = parsed.host
     context.user_data["add_port"] = parsed.port
-    await update.effective_message.reply_text("Send SSH username (default: root). Send '-' to use root.")
+    await update.effective_message.reply_text("👤 Send SSH username (default: root). Send '-' to use root.")
     return ADD_USERNAME
 
 
 async def add_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.effective_message.text.strip()
-    username = "root" if raw in {"", "-"} else raw
+    username = "root" if raw in {"", "-"} or raw.lower() == "root" else raw
     context.user_data["add_username"] = username
-    await update.effective_message.reply_text("Send SSH password")
+    await update.effective_message.reply_text("🔐 Send SSH password")
     return ADD_PASSWORD
 
 
 async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     password = update.effective_message.text
     if not password:
-        await update.effective_message.reply_text("Password cannot be empty.")
+        await update.effective_message.reply_text("⚠️ Password cannot be empty.")
         return ADD_PASSWORD
 
     store = get_store(context)
@@ -336,7 +336,7 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     await update.effective_message.reply_text(
-        f"Server saved. ID={server_id}, target={host}:{port}\nRunning SSH connectivity check...",
+        f"✅ Server saved. ID={server_id}, target={host}:{port}\n🔎 Running SSH connectivity check...",
     )
 
     settings = get_settings(context)
@@ -349,10 +349,10 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
 
     if check_ok:
-        check_text = "SSH check: SUCCESS (connected)."
+        check_text = "✅ SSH check: SUCCESS (connected)."
     else:
         check_text = (
-            "SSH check: FAILED.\n"
+            "❌ SSH check: FAILED.\n"
             f"Reason: {check_detail}\n"
             "Server is still saved (as requested)."
         )
@@ -370,19 +370,19 @@ async def edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     text = await list_servers_text(get_store(context))
     await update.effective_message.reply_text(text)
-    await update.effective_message.reply_text("Send server ID to edit")
+    await update.effective_message.reply_text("✏️ Send server ID to edit")
     return EDIT_SELECT_ID
 
 
 async def edit_select_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.effective_message.text.strip()
     if not raw.isdigit():
-        await update.effective_message.reply_text("Invalid ID. Send a number.")
+        await update.effective_message.reply_text("⚠️ Invalid ID. Send a number.")
         return EDIT_SELECT_ID
 
     server = get_store(context).get_server(int(raw))
     if server is None:
-        await update.effective_message.reply_text("Server not found. Try another ID.")
+        await update.effective_message.reply_text("⚠️ Server not found. Try another ID.")
         return EDIT_SELECT_ID
 
     context.user_data["edit_server"] = server
@@ -400,7 +400,7 @@ async def edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         name = server.name
     else:
         if not NAME_RE.match(raw):
-            await update.effective_message.reply_text("Invalid name. Try again.")
+            await update.effective_message.reply_text("⚠️ Invalid name. Try again.")
             return EDIT_NAME
         name = raw
 
@@ -421,7 +421,7 @@ async def edit_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         parsed = parse_host_input(raw)
         if parsed is None:
-            await update.effective_message.reply_text("Invalid host format. Try again.")
+            await update.effective_message.reply_text("⚠️ Invalid host format. Try again.")
             return EDIT_HOST
         host = parsed.host
         port = parsed.port
@@ -438,9 +438,11 @@ async def edit_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     server: ServerRecord = context.user_data["edit_server"]
     raw = update.effective_message.text.strip()
     username = server.username if raw == "-" else raw
+    if username.lower() == "root":
+        username = "root"
 
     if not username:
-        await update.effective_message.reply_text("Username cannot be empty.")
+        await update.effective_message.reply_text("⚠️ Username cannot be empty.")
         return EDIT_USERNAME
 
     context.user_data["edit_username"] = username
@@ -455,7 +457,7 @@ async def edit_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     raw = update.effective_message.text
     password = None if raw.strip() == "-" else raw
     if password == "":
-        await update.effective_message.reply_text("Password cannot be empty. Use '-' to keep current password.")
+        await update.effective_message.reply_text("⚠️ Password cannot be empty. Use '-' to keep current password.")
         return EDIT_PASSWORD
 
     try:
@@ -472,10 +474,10 @@ async def edit_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     if not ok:
-        await update.effective_message.reply_text("Server no longer exists.", reply_markup=MENU)
+        await update.effective_message.reply_text("⚠️ Server no longer exists.", reply_markup=MENU)
         return ConversationHandler.END
 
-    await update.effective_message.reply_text("Server updated.", reply_markup=MENU)
+    await update.effective_message.reply_text("✅ Server updated.", reply_markup=MENU)
     return ConversationHandler.END
 
 
@@ -485,21 +487,21 @@ async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     text = await list_servers_text(get_store(context))
     await update.effective_message.reply_text(text)
-    await update.effective_message.reply_text("Send server ID to delete")
+    await update.effective_message.reply_text("🗑️ Send server ID to delete")
     return DELETE_SELECT_ID
 
 
 async def delete_pick_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.effective_message.text.strip()
     if not raw.isdigit():
-        await update.effective_message.reply_text("Invalid ID. Send a number.")
+        await update.effective_message.reply_text("⚠️ Invalid ID. Send a number.")
         return DELETE_SELECT_ID
 
     ok = get_store(context).delete_server(int(raw))
     if ok:
-        await update.effective_message.reply_text("Server deleted.", reply_markup=MENU)
+        await update.effective_message.reply_text("✅ Server deleted.", reply_markup=MENU)
     else:
-        await update.effective_message.reply_text("Server not found.", reply_markup=MENU)
+        await update.effective_message.reply_text("⚠️ Server not found.", reply_markup=MENU)
     return ConversationHandler.END
 
 
@@ -511,30 +513,30 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     if chat_id in active_chats:
         await update.effective_message.reply_text(
-            "A test is already running in this chat. Wait until it finishes.",
+            "⏳ A test is already running in this chat. Wait until it finishes.",
             reply_markup=MENU,
         )
         return ConversationHandler.END
 
     if not get_store(context).list_servers():
-        await update.effective_message.reply_text("No servers saved yet. Add server first.", reply_markup=MENU)
+        await update.effective_message.reply_text("📭 No servers saved yet. Add server first.", reply_markup=MENU)
         return ConversationHandler.END
 
-    await update.effective_message.reply_text("Send target server address:port (example: 64.176.186.228:443)")
+    await update.effective_message.reply_text("🎯 Send target server address:port (example: 64.176.186.228:443)")
     return TEST_TARGET
 
 
 async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     target = update.effective_message.text.strip()
     if not validate_target(target):
-        await update.effective_message.reply_text("Invalid address:port format. Try again.")
+        await update.effective_message.reply_text("⚠️ Invalid address:port format. Try again.")
         return TEST_TARGET
 
     chat_id = update.effective_chat.id
     get_active_chats(context).add(chat_id)
 
     await update.effective_message.reply_text(
-        f"Test started for target {target}. Live logs will be streamed here.",
+        f"🚀 Test started for target {target}. Live logs will be streamed here.",
         reply_markup=MENU,
     )
 
@@ -569,13 +571,13 @@ async def run_test_batch(app: Application, chat_id: int, target: str) -> None:
             results.append(result)
 
             if result.status == TestStatus.FAILED_PATTERN:
-                footer = "Result: FAILED pattern detected, config cleaned up."
+                footer = "❌ Result: FAILED pattern detected, config cleaned up."
             elif result.status == TestStatus.MANUAL_REVIEW:
-                footer = "Result: UNKNOWN pattern, manual review needed."
+                footer = "🟡 Result: UNKNOWN pattern, manual review needed."
             elif result.status == TestStatus.SSH_ERROR:
-                footer = f"Result: SSH error ({result.reason})"
+                footer = f"🔴 Result: SSH error ({result.reason})"
             else:
-                footer = f"Result: setup/runtime error ({result.reason})"
+                footer = f"🔴 Result: setup/runtime error ({result.reason})"
 
             await live.close(footer)
 
@@ -601,11 +603,11 @@ def format_server_report(result: ServerTestResult) -> str:
     }
 
     lines = [
-        f"Server: {result.server_name} ({result.host}:{result.port})",
-        f"Status: {status_map[result.status]}",
-        f"Reason: {result.reason}",
+        f"🖥️ Server: {result.server_name} ({result.host}:{result.port})",
+        f"📌 Status: {status_map[result.status]}",
+        f"🧾 Reason: {result.reason}",
         (
-            "Counters: "
+            "📈 Counters: "
             f"disconnected={result.analyzer.disconnected_count}, "
             f"reconnect={result.analyzer.reconnect_count}, "
             f"streams_zero={result.analyzer.streams_zero_count}"
@@ -613,7 +615,7 @@ def format_server_report(result: ServerTestResult) -> str:
     ]
 
     if result.log_tail:
-        lines.append("Log tail:")
+        lines.append("🪵 Log tail:")
         lines.extend(f"  {line[:160]}" for line in result.log_tail[-8:])
 
     return "\n".join(lines)
@@ -623,16 +625,16 @@ def format_final_report(results: list[ServerTestResult]) -> str:
     summary = summarize_results(results)
 
     lines = [
-        "Batch completed.",
+        "✅ Batch completed.",
         (
-            "Summary: "
+            "📊 Summary: "
             f"failed_pattern={summary['failed_pattern']} | "
             f"manual_review={summary['manual_review']} | "
             f"ssh_error={summary['ssh_error']} | "
             f"setup_error={summary['setup_error']}"
         ),
         "",
-        "Per server:",
+        "🧩 Per server:",
     ]
 
     for item in results:
@@ -642,15 +644,27 @@ def format_final_report(results: list[ServerTestResult]) -> str:
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.effective_message.reply_text("Cancelled.", reply_markup=MENU)
+    await update.effective_message.reply_text("🛑 Cancelled.", reply_markup=MENU)
     return ConversationHandler.END
 
 
 async def cancel_on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
-        "Current process was cancelled. Press your desired menu button again.",
+        "↩️ Switched to selected menu action.",
         reply_markup=MENU,
     )
+    text = (update.effective_message.text or "").strip()
+    if text == BTN_ADD:
+        return await add_start(update, context)
+    if text == BTN_EDIT:
+        return await edit_start(update, context)
+    if text == BTN_DELETE:
+        return await delete_start(update, context)
+    if text == BTN_TEST:
+        return await test_start(update, context)
+    if text == BTN_LIST:
+        await list_servers_button(update, context)
+        return ConversationHandler.END
     return ConversationHandler.END
 
 
@@ -676,55 +690,24 @@ def build_app() -> Application:
     app.bot_data["tester"] = tester
     app.bot_data["active_chats"] = set()
 
-    add_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_ADD)}$"), add_start)],
+    main_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_ADD)}$"), add_start),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_EDIT)}$"), edit_start),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_DELETE)}$"), delete_start),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_TEST)}$"), test_start),
+        ],
         states={
             ADD_NAME: [MessageHandler(STATE_TEXT_FILTER, add_name)],
             ADD_HOST: [MessageHandler(STATE_TEXT_FILTER, add_host)],
             ADD_USERNAME: [MessageHandler(STATE_TEXT_FILTER, add_username)],
             ADD_PASSWORD: [MessageHandler(STATE_TEXT_FILTER, add_password)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("start", restart_menu_from_conversation),
-            MessageHandler(MENU_BUTTON_FILTER, cancel_on_menu_button),
-        ],
-        allow_reentry=True,
-    )
-
-    edit_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_EDIT)}$"), edit_start)],
-        states={
             EDIT_SELECT_ID: [MessageHandler(STATE_TEXT_FILTER, edit_select_id)],
             EDIT_NAME: [MessageHandler(STATE_TEXT_FILTER, edit_name)],
             EDIT_HOST: [MessageHandler(STATE_TEXT_FILTER, edit_host)],
             EDIT_USERNAME: [MessageHandler(STATE_TEXT_FILTER, edit_username)],
             EDIT_PASSWORD: [MessageHandler(STATE_TEXT_FILTER, edit_password)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("start", restart_menu_from_conversation),
-            MessageHandler(MENU_BUTTON_FILTER, cancel_on_menu_button),
-        ],
-        allow_reentry=True,
-    )
-
-    delete_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_DELETE)}$"), delete_start)],
-        states={
             DELETE_SELECT_ID: [MessageHandler(STATE_TEXT_FILTER, delete_pick_id)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("start", restart_menu_from_conversation),
-            MessageHandler(MENU_BUTTON_FILTER, cancel_on_menu_button),
-        ],
-        allow_reentry=True,
-    )
-
-    test_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_TEST)}$"), test_start)],
-        states={
             TEST_TARGET: [MessageHandler(STATE_TEXT_FILTER, test_receive_target)],
         },
         fallbacks=[
@@ -735,10 +718,7 @@ def build_app() -> Application:
         allow_reentry=True,
     )
 
-    app.add_handler(add_conv)
-    app.add_handler(edit_conv)
-    app.add_handler(delete_conv)
-    app.add_handler(test_conv)
+    app.add_handler(main_conv)
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
