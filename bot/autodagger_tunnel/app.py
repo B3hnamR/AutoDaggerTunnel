@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import time
-from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Optional, Tuple
+from typing import Optional, Tuple
 
 import asyncssh
 from dotenv import load_dotenv
@@ -86,27 +85,70 @@ class ParsedHost:
     port: int
 
 
-class LiveLogMessage:
-    def __init__(self, app: Application, chat_id: int, title: str, target: str) -> None:
+class CompactQueueLiveMessage:
+    def __init__(self, app: Application, chat_id: int, target_total: int, server_total: int) -> None:
         self.app = app
         self.chat_id = chat_id
-        self.title = title
-        self.target = target
+        self.target_total = target_total
+        self.server_total = server_total
         self.message_id: Optional[int] = None
-        self.last_flush = 0.0
         self.started_at = time.monotonic()
-        self.events: Deque[str] = deque(maxlen=14)
+        self.last_flush = 0.0
+
+        self.target_index = 0
+        self.current_target = "-"
+        self.server_index = 0
+        self.current_server = "-"
+        self.current_state = "idle"
+        self.latest_signal = "-"
+
         self.connected_count = 0
         self.disconnected_count = 0
         self.reconnect_count = 0
         self.streams_zero_count = 0
         self.oom_count = 0
 
+        self.target_done = 0
+        self.target_success = 0
+        self.target_failed = 0
+        self.target_review = 0
+        self.target_ssh = 0
+        self.target_setup = 0
+
     async def start(self) -> None:
         msg = await self.app.bot.send_message(chat_id=self.chat_id, text=self._render())
         self.message_id = msg.message_id
 
-    async def push(self, line: str) -> None:
+    async def begin_target(self, target_index: int, target: str) -> None:
+        self.target_index = target_index
+        self.current_target = target
+        self.server_index = 0
+        self.current_server = "-"
+        self.current_state = "target_started"
+        self.latest_signal = "target queued"
+
+        self.target_done = 0
+        self.target_success = 0
+        self.target_failed = 0
+        self.target_review = 0
+        self.target_ssh = 0
+        self.target_setup = 0
+        await self.flush(force=True)
+
+    async def begin_server(self, server_index: int, server: ServerRecord) -> None:
+        self.server_index = server_index
+        self.current_server = f"{server.name} ({server.host}:{server.port})"
+        self.current_state = "running"
+        self.latest_signal = "waiting for diagnostics"
+
+        self.connected_count = 0
+        self.disconnected_count = 0
+        self.reconnect_count = 0
+        self.streams_zero_count = 0
+        self.oom_count = 0
+        await self.flush(force=True)
+
+    async def on_log_line(self, line: str) -> None:
         event = self._extract_event(line)
         if event is None:
             return
@@ -123,83 +165,105 @@ class LiveLogMessage:
         elif event_type == "oom":
             self.oom_count += 1
 
-        self.events.append(event_text)
+        self.latest_signal = event_text
+        await self.flush()
 
-        now = time.monotonic()
-        if now - self.last_flush >= 1.4:
-            await self.flush()
+    async def finish_server(self, result: ServerTestResult) -> None:
+        self.target_done += 1
+        if result.status == TestStatus.SUCCESS:
+            self.target_success += 1
+            self.current_state = "server_done_success"
+            self.latest_signal = "SUCCESS detected"
+        elif result.status == TestStatus.FAILED_PATTERN:
+            self.target_failed += 1
+            self.current_state = "server_done_failed_pattern"
+            self.latest_signal = "FAILED pattern detected"
+        elif result.status == TestStatus.MANUAL_REVIEW:
+            self.target_review += 1
+            self.current_state = "server_done_manual_review"
+            self.latest_signal = "manual review needed"
+        elif result.status == TestStatus.SSH_ERROR:
+            self.target_ssh += 1
+            self.current_state = "server_done_ssh_error"
+            self.latest_signal = "SSH error"
+        else:
+            self.target_setup += 1
+            self.current_state = "server_done_setup_error"
+            self.latest_signal = "setup/runtime error"
+
+        await self.flush(force=True)
+
+    async def finish_target(self, target: str) -> None:
+        self.current_target = target
+        self.current_state = "target_done"
+        if self.target_success > 0:
+            self.latest_signal = f"target completed with {self.target_success} successful server(s)"
+        else:
+            self.latest_signal = "target completed with no successful server"
+        await self.flush(force=True)
+
+    async def finish_queue(self) -> None:
+        self.current_state = "queue_done"
+        self.latest_signal = "queue completed"
+        await self.flush(force=True)
 
     async def flush(self, force: bool = False) -> None:
         if self.message_id is None:
             return
 
         now = time.monotonic()
-        if not force and now - self.last_flush < 0.8:
+        if not force and now - self.last_flush < 1.0:
             return
-
-        text = self._render()
-        if len(text) > 3900:
-            text = text[-3900:]
 
         try:
             await self.app.bot.edit_message_text(
                 chat_id=self.chat_id,
                 message_id=self.message_id,
-                text=text,
+                text=self._render(),
             )
             self.last_flush = now
         except BadRequest as exc:
             if "Message is not modified" not in str(exc):
                 logger.warning("Live log update failed: %s", exc)
 
-    async def close(self, footer: str) -> None:
-        self.events.append(footer)
-        await self.flush(force=True)
-
     def _render(self) -> str:
         elapsed = int(time.monotonic() - self.started_at)
-
-        lines = [
-            f"{ICON_RADAR} {self.title}",
-            f"{ICON_TARGET} Target: {self.target}",
-            (
-                f"{ICON_CHART} Signals: connected={self.connected_count} | "
-                f"disconnected={self.disconnected_count} | reconnect={self.reconnect_count} | "
-                f"streams_zero={self.streams_zero_count} | oom={self.oom_count}"
-            ),
-            f"{ICON_INFO} Elapsed: {elapsed}s",
-            "",
-            "Detected events:",
-        ]
-
-        if self.events:
-            lines.extend(f"- {item}" for item in self.events)
-        else:
-            lines.append("- waiting for diagnostic events...")
-
-        return "\n".join(lines)
+        return "\n".join(
+            [
+                f"{ICON_RADAR} Tunnel test live status",
+                f"{ICON_TARGET} Target: {self.target_index}/{self.target_total} -> {self.current_target}",
+                f"{ICON_PC} Server: {self.server_index}/{self.server_total} -> {self.current_server}",
+                f"{ICON_INFO} State: {self.current_state}",
+                f"{ICON_INFO} Signal: {self.latest_signal}",
+                (
+                    f"{ICON_CHART} Counters: c={self.connected_count} d={self.disconnected_count} "
+                    f"r={self.reconnect_count} s0={self.streams_zero_count} oom={self.oom_count}"
+                ),
+                (
+                    f"{ICON_CHART} Target progress: done={self.target_done}/{self.server_total} | "
+                    f"ok={self.target_success} fail={self.target_failed} review={self.target_review} "
+                    f"ssh={self.target_ssh} setup={self.target_setup}"
+                ),
+                f"{ICON_WAIT} Elapsed: {elapsed}s",
+            ]
+        )
 
     def _extract_event(self, line: str) -> Optional[Tuple[str, str]]:
         lower = line.lower()
 
         if "oom-kill" in lower or "failed with result 'oom-kill'" in lower:
             return "oom", "OOM_KILL detected"
-
         if "] connected " in lower:
             return "connected", "CONNECTED detected"
-
         if "] disconnected " in lower:
             return "disconnected", "DISCONNECTED detected"
-
         if "reconnect in" in lower:
             attempt = ATTEMPT_RE.search(line)
             if attempt:
-                return "reconnect", f"RECONNECT detected (attempt #{attempt.group(1)})"
+                return "reconnect", f"RECONNECT detected (#{attempt.group(1)})"
             return "reconnect", "RECONNECT detected"
-
         if "streams=0" in lower:
             return "streams_zero", "STREAMS_ZERO detected"
-
         return None
 
 
@@ -625,8 +689,8 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
         f"{ICON_TARGET} Send one or multiple target address:port values.\n"
         "Examples:\n"
-        "- 94.183.180.8:443\n"
-        "- 94.183.180.8:443, 66.33.88.10:8443"
+        "- 203.0.113.10:443\n"
+        "- 203.0.113.10:443, 198.51.100.20:8443"
     )
     return TEST_TARGET
 
@@ -649,11 +713,6 @@ async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     get_active_chats(context).add(chat_id)
 
-    await update.effective_message.reply_text(
-        f"{ICON_ROCKET} Queue started for {len(targets)} target(s). Live diagnostic updates will be shown.",
-        reply_markup=MENU,
-    )
-
     context.application.create_task(run_target_queue(context.application, chat_id, targets))
     return ConversationHandler.END
 
@@ -666,27 +725,26 @@ async def run_target_queue(app: Application, chat_id: int, targets: list[str]) -
 
     servers = store.list_servers()
     batches: list[tuple[str, list[ServerTestResult]]] = []
+    live = CompactQueueLiveMessage(
+        app=app,
+        chat_id=chat_id,
+        target_total=len(targets),
+        server_total=len(servers),
+    )
 
     try:
+        await live.start()
+
         for target_index, target in enumerate(targets, start=1):
-            await app.bot.send_message(
-                chat_id=chat_id,
-                text=f"{ICON_TARGET} Target queue item {target_index}/{len(targets)}: {target}",
-            )
+            await live.begin_target(target_index=target_index, target=target)
 
             target_results: list[ServerTestResult] = []
 
             for server_index, server in enumerate(servers, start=1):
-                title = (
-                    f"Target {target_index}/{len(targets)} | "
-                    f"Server {server_index}/{len(servers)} | "
-                    f"{server.name} ({server.host}:{server.port})"
-                )
-                live = LiveLogMessage(app, chat_id, title=title, target=target)
-                await live.start()
+                await live.begin_server(server_index=server_index, server=server)
 
                 async def on_line(line: str) -> None:
-                    await live.push(line)
+                    await live.on_log_line(line)
 
                 result = await tester.test_server(
                     server,
@@ -695,32 +753,19 @@ async def run_target_queue(app: Application, chat_id: int, targets: list[str]) -
                     on_log_line=on_line,
                 )
                 target_results.append(result)
-
-                await live.close(status_footer(result))
-                await app.bot.send_message(chat_id=chat_id, text=format_server_report(result))
+                await live.finish_server(result)
 
             batches.append((target, target_results))
-            await app.bot.send_message(chat_id=chat_id, text=format_target_summary(target, target_results))
+            await live.finish_target(target)
 
-        await app.bot.send_message(chat_id=chat_id, text=format_queue_summary(batches))
+        await live.finish_queue()
+        await send_long_text(app, chat_id, format_queue_summary(batches))
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("Target queue failed")
         await app.bot.send_message(chat_id=chat_id, text=f"{ICON_FAIL} Queue crashed: {exc}")
     finally:
         active_chats.discard(chat_id)
-
-
-def status_footer(result: ServerTestResult) -> str:
-    if result.status == TestStatus.SUCCESS:
-        return f"{ICON_OK} SUCCESS signal detected"
-    if result.status == TestStatus.FAILED_PATTERN:
-        return f"{ICON_FAIL} FAILED pattern detected (cleanup applied)"
-    if result.status == TestStatus.MANUAL_REVIEW:
-        return f"{ICON_INFO} Manual review required"
-    if result.status == TestStatus.SSH_ERROR:
-        return f"{ICON_FAIL} SSH error"
-    return f"{ICON_FAIL} Setup/runtime error"
 
 
 def format_server_report(result: ServerTestResult) -> str:
@@ -749,30 +794,6 @@ def format_server_report(result: ServerTestResult) -> str:
     return "\n".join(lines)
 
 
-def format_target_summary(target: str, results: list[ServerTestResult]) -> str:
-    summary = summarize_results(results)
-    success_servers = [f"{r.server_name} ({r.host})" for r in results if r.status == TestStatus.SUCCESS]
-
-    lines = [
-        f"{ICON_OK} Target completed: {target}",
-        (
-            f"{ICON_CHART} Summary: "
-            f"success={summary['success']} | "
-            f"failed_pattern={summary['failed_pattern']} | "
-            f"manual_review={summary['manual_review']} | "
-            f"ssh_error={summary['ssh_error']} | "
-            f"setup_error={summary['setup_error']}"
-        ),
-    ]
-
-    if success_servers:
-        lines.append(f"{ICON_OK} Successful servers: " + ", ".join(success_servers))
-    else:
-        lines.append(f"{ICON_FAIL} No successful server detected for this target.")
-
-    return "\n".join(lines)
-
-
 def format_queue_summary(batches: list[tuple[str, list[ServerTestResult]]]) -> str:
     all_results: list[ServerTestResult] = []
     for _, batch_results in batches:
@@ -796,12 +817,54 @@ def format_queue_summary(batches: list[tuple[str, list[ServerTestResult]]]) -> s
 
     for target, results in batches:
         success_servers = [r.server_name for r in results if r.status == TestStatus.SUCCESS]
+        target_summary = summarize_results(results)
         if success_servers:
-            lines.append(f"- {target}: " + ", ".join(success_servers))
+            lines.append(
+                f"- {target}: {', '.join(success_servers)} "
+                f"(ok={target_summary['success']} fail={target_summary['failed_pattern']} "
+                f"review={target_summary['manual_review']} ssh={target_summary['ssh_error']} "
+                f"setup={target_summary['setup_error']})"
+            )
         else:
-            lines.append(f"- {target}: none")
+            lines.append(
+                f"- {target}: none "
+                f"(ok={target_summary['success']} fail={target_summary['failed_pattern']} "
+                f"review={target_summary['manual_review']} ssh={target_summary['ssh_error']} "
+                f"setup={target_summary['setup_error']})"
+            )
+
+    lines.append("")
+    lines.append("Detailed per target:")
+    for target, results in batches:
+        lines.append(f"")
+        lines.append(f"{ICON_TARGET} {target}")
+        for item in results:
+            lines.append(format_server_report(item))
 
     return "\n".join(lines)
+
+
+async def send_long_text(app: Application, chat_id: int, text: str) -> None:
+    max_len = 3500
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines():
+        candidate = line if not current else f"{current}\n{line}"
+        if len(candidate) <= max_len:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = line
+    if current:
+        chunks.append(current)
+
+    if not chunks:
+        await app.bot.send_message(chat_id=chat_id, text=text)
+        return
+
+    for chunk in chunks:
+        await app.bot.send_message(chat_id=chat_id, text=chunk)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
