@@ -15,6 +15,15 @@ def _parse_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _parse_float(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def _parse_allowed_ids(raw: str) -> Set[int]:
     ids: Set[int] = set()
     for item in raw.split(","):
@@ -38,6 +47,9 @@ class Settings:
     ssh_connect_timeout: int
     ssh_command_timeout: int
     dagger_binary_url: str
+    max_parallel_servers: int
+    ssh_max_retries: int
+    ssh_retry_backoff_seconds: float
 
 
 
@@ -71,6 +83,9 @@ def load_settings() -> Settings:
         test_window_seconds=_parse_int("TEST_WINDOW_SECONDS", 75),
         ssh_connect_timeout=_parse_int("SSH_CONNECT_TIMEOUT", 12),
         ssh_command_timeout=_parse_int("SSH_COMMAND_TIMEOUT", 45),
+        max_parallel_servers=_parse_int("MAX_PARALLEL_SERVERS", 3),
+        ssh_max_retries=_parse_int("SSH_MAX_RETRIES", 3),
+        ssh_retry_backoff_seconds=_parse_float("SSH_RETRY_BACKOFF_SECONDS", 1.5),
         dagger_binary_url=os.getenv(
             "DAGGER_BINARY_URL",
             "https://github.com/itsFLoKi/daggerConnect/releases/download/v1.5.1/DaggerConnect",

@@ -313,6 +313,32 @@ show_current_config() {
   read -r -p "Press Enter to continue..." _
 }
 
+uninstall_bot() {
+  echo
+  echo "WARNING: This will completely remove the bot, your configurations, and the database."
+  read -r -p "Are you absolutely sure you want to uninstall? [y/N]: " ans
+  if [[ ! "${ans}" =~ ^[Yy]$ ]]; then
+    echo "Uninstall aborted."
+    read -r -p "Press Enter to continue..." _
+    return
+  fi
+
+  echo "[INFO] Stopping and disabling service..."
+  systemctl stop "${APP_NAME}.service" >/dev/null 2>&1 || true
+  systemctl disable "${APP_NAME}.service" >/dev/null 2>&1 || true
+
+  echo "[INFO] Removing systemd service file..."
+  rm -f "${SERVICE_FILE}"
+  systemctl daemon-reload
+
+  echo "[INFO] Removing installation directory..."
+  rm -rf "${INSTALL_DIR}"
+
+  echo "[OK] AutoDaggerTunnel has been successfully uninstalled."
+  echo "You can safely exit this script now."
+  exit 0
+}
+
 main_menu() {
   while true; do
     print_banner
@@ -325,10 +351,11 @@ main_menu() {
     echo "7) Live logs"
     echo "8) Show current config"
     echo "9) Update bot now (pull + restart)"
-    echo "10) Exit"
+    echo "10) Uninstall bot"
+    echo "11) Exit"
     echo
 
-    read -r -p "Select [1-10]: " choice
+    read -r -p "Select [1-11]: " choice
     case "${choice}" in
       1) install_or_update ;;
       2) reconfigure_only ;;
@@ -339,7 +366,8 @@ main_menu() {
       7) logs_service ;;
       8) show_current_config ;;
       9) update_bot_only ;;
-      10) exit 0 ;;
+      10) uninstall_bot ;;
+      11) exit 0 ;;
       *)
         echo "Invalid option."
         read -r -p "Press Enter to continue..." _

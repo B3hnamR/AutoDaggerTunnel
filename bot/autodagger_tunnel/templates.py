@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from textwrap import dedent
+
 def _yaml_escape(value: str) -> str:
     return value.replace('"', '\\"')
 
