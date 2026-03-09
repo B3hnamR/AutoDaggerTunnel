@@ -35,7 +35,7 @@ logger = logging.getLogger("autodagger_tunnel")
 ADD_NAME, ADD_HOST, ADD_USERNAME, ADD_PASSWORD = range(4)
 EDIT_SELECT_ID, EDIT_NAME, EDIT_HOST, EDIT_USERNAME, EDIT_PASSWORD = range(4, 9)
 DELETE_SELECT_ID = 9
-TEST_TARGET = 10
+TEST_TRANSPORT, TEST_TARGET = range(10, 12)
 
 ICON_OK = "\u2705"
 ICON_WARN = "\u26A0\ufe0f"
@@ -58,6 +58,9 @@ ICON_NOTE = "\U0001F9FE"
 ICON_SWITCH = "\u21A9\ufe0f"
 ICON_CANCEL = "\U0001F6D1"
 ICON_ID = "\U0001F194"
+
+MODE_QUANTUMMUX = "quantummux"
+MODE_TUN_BIP = "tun_bip"
 
 BTN_TEST = f"{ICON_ROCKET} Start Tunnel Test"
 BTN_ADD = f"{ICON_ADD} Add Server"
@@ -86,11 +89,22 @@ class ParsedHost:
 
 
 class CompactQueueLiveMessage:
-    def __init__(self, app: Application, chat_id: int, target_total: int, server_total: int) -> None:
+    def __init__(
+        self,
+        app: Application,
+        chat_id: int,
+        target_total: int,
+        server_total: int,
+        *,
+        mode_label: str,
+        show_counters: bool,
+    ) -> None:
         self.app = app
         self.chat_id = chat_id
         self.target_total = target_total
         self.server_total = server_total
+        self.mode_label = mode_label
+        self.show_counters = show_counters
         self.message_id: Optional[int] = None
         self.started_at = time.monotonic()
         self.last_flush = 0.0
@@ -170,10 +184,13 @@ class CompactQueueLiveMessage:
 
     async def finish_server(self, result: ServerTestResult) -> None:
         self.target_done += 1
-        if result.status == TestStatus.SUCCESS:
+        if result.status in {TestStatus.SUCCESS, TestStatus.CONFIGURED}:
             self.target_success += 1
             self.current_state = "server_done_success"
-            self.latest_signal = "SUCCESS detected"
+            if result.status == TestStatus.CONFIGURED:
+                self.latest_signal = "CONFIG_APPLIED"
+            else:
+                self.latest_signal = "SUCCESS detected"
         elif result.status == TestStatus.FAILED_PATTERN:
             self.target_failed += 1
             self.current_state = "server_done_failed_pattern"
@@ -228,17 +245,21 @@ class CompactQueueLiveMessage:
 
     def _render(self) -> str:
         elapsed = int(time.monotonic() - self.started_at)
-        return "\n".join(
+        lines = [
+            f"{ICON_RADAR} Tunnel test live status",
+            f"{ICON_NOTE} Mode: {self.mode_label}",
+            f"{ICON_TARGET} Target: {self.target_index}/{self.target_total} -> {self.current_target}",
+            f"{ICON_PC} Server: {self.server_index}/{self.server_total} -> {self.current_server}",
+            f"{ICON_INFO} State: {self.current_state}",
+            f"{ICON_INFO} Signal: {self.latest_signal}",
+        ]
+        if self.show_counters:
+            lines.append(
+                f"{ICON_CHART} Counters: c={self.connected_count} d={self.disconnected_count} "
+                f"r={self.reconnect_count} s0={self.streams_zero_count} oom={self.oom_count}"
+            )
+        lines.extend(
             [
-                f"{ICON_RADAR} Tunnel test live status",
-                f"{ICON_TARGET} Target: {self.target_index}/{self.target_total} -> {self.current_target}",
-                f"{ICON_PC} Server: {self.server_index}/{self.server_total} -> {self.current_server}",
-                f"{ICON_INFO} State: {self.current_state}",
-                f"{ICON_INFO} Signal: {self.latest_signal}",
-                (
-                    f"{ICON_CHART} Counters: c={self.connected_count} d={self.disconnected_count} "
-                    f"r={self.reconnect_count} s0={self.streams_zero_count} oom={self.oom_count}"
-                ),
                 (
                     f"{ICON_CHART} Target progress: done={self.target_done}/{self.server_total} | "
                     f"ok={self.target_success} fail={self.target_failed} review={self.target_review} "
@@ -247,6 +268,7 @@ class CompactQueueLiveMessage:
                 f"{ICON_WAIT} Elapsed: {elapsed}s",
             ]
         )
+        return "\n".join(lines)
 
     def _extract_event(self, line: str) -> Optional[Tuple[str, str]]:
         lower = line.lower()
@@ -329,8 +351,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Flow:\n"
         "1) Add outbound servers\n"
         "2) Start tunnel test\n"
-        "3) Enter one or more target address:port values\n"
-        "4) Bot runs checks in queue and sends per-target summaries"
+        "3) Select tunnel mode (quantummux or tun+bip)\n"
+        "4) Enter one or more target address:port values\n"
+        "5) Bot runs queue and sends final summary"
     )
     await update.effective_message.reply_text(text, reply_markup=MENU)
 
@@ -388,6 +411,21 @@ def parse_targets_input(raw: str) -> tuple[list[str], list[str]]:
             invalid_targets.append(token)
 
     return unique_targets, invalid_targets
+
+
+def parse_transport_choice(raw: str) -> Optional[str]:
+    text = raw.strip().lower()
+    if text in {"1", "quantummux", "quantum", "qm", "q"}:
+        return MODE_QUANTUMMUX
+    if text in {"2", "tun+bip", "tun + bip", "tun-bip", "tun", "bip"}:
+        return MODE_TUN_BIP
+    return None
+
+
+def transport_label(mode: str) -> str:
+    if mode == MODE_TUN_BIP:
+        return "tun + bip"
+    return "quantummux"
 
 
 def compact_error(exc: Exception) -> str:
@@ -687,6 +725,23 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     await update.effective_message.reply_text(
+        f"{ICON_NOTE} Select tunnel mode:\n"
+        "1) quantummux (auto log check)\n"
+        "2) tun + bip (config only, manual test)"
+    )
+    return TEST_TRANSPORT
+
+
+async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    mode = parse_transport_choice(update.effective_message.text)
+    if mode is None:
+        await update.effective_message.reply_text(
+            f"{ICON_WARN} Invalid mode. Send 1 for quantummux or 2 for tun+bip."
+        )
+        return TEST_TRANSPORT
+
+    context.user_data["test_mode"] = mode
+    await update.effective_message.reply_text(
         f"{ICON_TARGET} Send one or multiple target address:port values.\n"
         "Examples:\n"
         "- 203.0.113.10:443\n"
@@ -713,11 +768,21 @@ async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     get_active_chats(context).add(chat_id)
 
-    context.application.create_task(run_target_queue(context.application, chat_id, targets))
+    mode = context.user_data.get("test_mode", MODE_QUANTUMMUX)
+
+    await update.effective_message.reply_text(
+        f"{ICON_ROCKET} Queue started in mode: {transport_label(mode)}",
+        reply_markup=MENU,
+    )
+
+    if mode == MODE_TUN_BIP:
+        context.application.create_task(run_tun_bip_queue(context.application, chat_id, targets))
+    else:
+        context.application.create_task(run_quantummux_queue(context.application, chat_id, targets))
     return ConversationHandler.END
 
 
-async def run_target_queue(app: Application, chat_id: int, targets: list[str]) -> None:
+async def run_quantummux_queue(app: Application, chat_id: int, targets: list[str]) -> None:
     store: ServerStore = app.bot_data["store"]
     settings: Settings = app.bot_data["settings"]
     tester: DaggerSshTester = app.bot_data["tester"]
@@ -730,6 +795,8 @@ async def run_target_queue(app: Application, chat_id: int, targets: list[str]) -
         chat_id=chat_id,
         target_total=len(targets),
         server_total=len(servers),
+        mode_label="quantummux",
+        show_counters=True,
     )
 
     try:
@@ -759,7 +826,7 @@ async def run_target_queue(app: Application, chat_id: int, targets: list[str]) -
             await live.finish_target(target)
 
         await live.finish_queue()
-        await send_long_text(app, chat_id, format_queue_summary(batches))
+        await send_long_text(app, chat_id, format_queue_summary_quantummux(batches))
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("Target queue failed")
@@ -768,8 +835,58 @@ async def run_target_queue(app: Application, chat_id: int, targets: list[str]) -
         active_chats.discard(chat_id)
 
 
+async def run_tun_bip_queue(app: Application, chat_id: int, targets: list[str]) -> None:
+    store: ServerStore = app.bot_data["store"]
+    settings: Settings = app.bot_data["settings"]
+    tester: DaggerSshTester = app.bot_data["tester"]
+    active_chats: set[int] = app.bot_data["active_chats"]
+
+    servers = store.list_servers()
+    batches: list[tuple[str, list[ServerTestResult]]] = []
+    live = CompactQueueLiveMessage(
+        app=app,
+        chat_id=chat_id,
+        target_total=len(targets),
+        server_total=len(servers),
+        mode_label="tun + bip",
+        show_counters=False,
+    )
+
+    try:
+        await live.start()
+
+        for target_index, target in enumerate(targets, start=1):
+            await live.begin_target(target_index=target_index, target=target)
+
+            target_results: list[ServerTestResult] = []
+
+            for server_index, server in enumerate(servers, start=1):
+                await live.begin_server(server_index=server_index, server=server)
+
+                result = await tester.apply_tun_bip_config(
+                    server,
+                    target_addr=target,
+                    psk=settings.default_psk,
+                )
+                target_results.append(result)
+                await live.finish_server(result)
+
+            batches.append((target, target_results))
+            await live.finish_target(target)
+
+        await live.finish_queue()
+        await send_long_text(app, chat_id, format_queue_summary_tun_bip(batches))
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("TUN+BIP queue failed")
+        await app.bot.send_message(chat_id=chat_id, text=f"{ICON_FAIL} Queue crashed: {exc}")
+    finally:
+        active_chats.discard(chat_id)
+
+
 def format_server_report(result: ServerTestResult) -> str:
     status_map = {
+        TestStatus.CONFIGURED: "CONFIGURED",
         TestStatus.SUCCESS: "SUCCESS",
         TestStatus.FAILED_PATTERN: "FAILED_PATTERN",
         TestStatus.MANUAL_REVIEW: "MANUAL_REVIEW",
@@ -794,7 +911,7 @@ def format_server_report(result: ServerTestResult) -> str:
     return "\n".join(lines)
 
 
-def format_queue_summary(batches: list[tuple[str, list[ServerTestResult]]]) -> str:
+def format_queue_summary_quantummux(batches: list[tuple[str, list[ServerTestResult]]]) -> str:
     all_results: list[ServerTestResult] = []
     for _, batch_results in batches:
         all_results.extend(batch_results)
@@ -837,6 +954,53 @@ def format_queue_summary(batches: list[tuple[str, list[ServerTestResult]]]) -> s
     lines.append("Detailed per target:")
     for target, results in batches:
         lines.append(f"")
+        lines.append(f"{ICON_TARGET} {target}")
+        for item in results:
+            lines.append(format_server_report(item))
+
+    return "\n".join(lines)
+
+
+def format_queue_summary_tun_bip(batches: list[tuple[str, list[ServerTestResult]]]) -> str:
+    all_results: list[ServerTestResult] = []
+    for _, batch_results in batches:
+        all_results.extend(batch_results)
+
+    grand = summarize_results(all_results)
+
+    lines = [
+        f"{ICON_OK} TUN+BIP queue completed.",
+        (
+            f"{ICON_CHART} Grand summary: "
+            f"configured={grand['configured']} | "
+            f"ssh_error={grand['ssh_error']} | "
+            f"setup_error={grand['setup_error']}"
+        ),
+        "سرورها کانفیگ شدند، دستی تست کنید.",
+        "",
+        "Per target configured servers:",
+    ]
+
+    for target, results in batches:
+        configured_servers = [r.server_name for r in results if r.status == TestStatus.CONFIGURED]
+        target_summary = summarize_results(results)
+        if configured_servers:
+            lines.append(
+                f"- {target}: {', '.join(configured_servers)} "
+                f"(configured={target_summary['configured']} ssh={target_summary['ssh_error']} "
+                f"setup={target_summary['setup_error']})"
+            )
+        else:
+            lines.append(
+                f"- {target}: none "
+                f"(configured={target_summary['configured']} ssh={target_summary['ssh_error']} "
+                f"setup={target_summary['setup_error']})"
+            )
+
+    lines.append("")
+    lines.append("Detailed per target:")
+    for target, results in batches:
+        lines.append("")
         lines.append(f"{ICON_TARGET} {target}")
         for item in results:
             lines.append(format_server_report(item))
@@ -933,6 +1097,7 @@ def build_app() -> Application:
             EDIT_USERNAME: [MessageHandler(STATE_TEXT_FILTER, edit_username)],
             EDIT_PASSWORD: [MessageHandler(STATE_TEXT_FILTER, edit_password)],
             DELETE_SELECT_ID: [MessageHandler(STATE_TEXT_FILTER, delete_pick_id)],
+            TEST_TRANSPORT: [MessageHandler(STATE_TEXT_FILTER, test_receive_transport)],
             TEST_TARGET: [MessageHandler(STATE_TEXT_FILTER, test_receive_target)],
         },
         fallbacks=[

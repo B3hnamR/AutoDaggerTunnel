@@ -6,8 +6,10 @@ Telegram bot for automated DaggerConnect client deployment/testing on your outbo
 
 - Save outbound servers (name, host, ssh user, ssh password)
 - List / edit / delete saved servers
-- Start a tunnel test for a target `IP:PORT`
 - Start tunnel tests for one or multiple targets (`IP:PORT` queue)
+- Select tunnel mode before test:
+  - `quantummux`: configure + run + auto log diagnostics
+  - `tun+bip`: configure only (manual validation required)
 - For each saved server:
   - SSH connect
   - Install/update DaggerConnect binary
