@@ -19,6 +19,7 @@ HAVE_SSH=0
 HAVE_SCP=0
 HAVE_SSHPASS=0
 HAVE_SETSID=0
+HAVE_SETSID_WAIT=0
 
 env_escape() {
   local value="$1"
@@ -38,6 +39,12 @@ print_banner() {
 
 press_enter() {
   read -r -p "Press Enter to continue..." _
+}
+
+is_back_input() {
+  local value
+  value="$(echo "${1:-}" | tr '[:upper:]' '[:lower:]' | xargs)"
+  [[ "${value}" == "/back" || "${value}" == "back" || "${value}" == "b" || "${value}" == "0" ]]
 }
 
 require_root() {
@@ -77,8 +84,14 @@ ensure_dependencies() {
 
   if command -v setsid >/dev/null 2>&1; then
     HAVE_SETSID=1
+    if setsid -w true >/dev/null 2>&1; then
+      HAVE_SETSID_WAIT=1
+    else
+      HAVE_SETSID_WAIT=0
+    fi
   else
     HAVE_SETSID=0
+    HAVE_SETSID_WAIT=0
   fi
 
   if (( ${#missing[@]} > 0 )); then
@@ -284,6 +297,10 @@ ssh_options() {
   echo "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
 }
 
+password_auth_options() {
+  echo "-o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1"
+}
+
 auth_capability_check() {
   local password="$1"
   if [[ -z "${password}" ]]; then
@@ -319,10 +336,34 @@ EOF
     SSH_ASKPASS_REQUIRE=force \
     SSH_ASKPASS_PASSWORD="${password}" \
     DISPLAY="${DISPLAY:-:0}" \
-    setsid -w "$@"
+    "$@"
   local rc=$?
   rm -f "${askpass_script}"
   return ${rc}
+}
+
+run_non_interactive_session_no_stdin() {
+  if (( HAVE_SETSID == 1 )); then
+    if (( HAVE_SETSID_WAIT == 1 )); then
+      setsid -w "$@" < /dev/null
+    else
+      setsid "$@" < /dev/null
+    fi
+  else
+    "$@" < /dev/null
+  fi
+}
+
+run_non_interactive_session_keep_stdin() {
+  if (( HAVE_SETSID == 1 )); then
+    if (( HAVE_SETSID_WAIT == 1 )); then
+      setsid -w "$@"
+    else
+      setsid "$@"
+    fi
+  else
+    "$@"
+  fi
 }
 
 run_ssh_command() {
@@ -332,17 +373,19 @@ run_ssh_command() {
   local password="$4"
   local command="$5"
   local -a opts
+  local -a pwd_opts
   IFS=' ' read -r -a opts <<< "$(ssh_options)"
+  IFS=' ' read -r -a pwd_opts <<< "$(password_auth_options)"
   if [[ -n "${password}" ]]; then
     if ! auth_capability_check "${password}" >/dev/null 2>&1; then
       return 97
     fi
     if (( HAVE_SSHPASS == 1 )); then
       with_timeout "${SSH_COMMAND_TIMEOUT}" \
-        sshpass -p "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "${command}"
+        sshpass -p "${password}" ssh "${opts[@]}" "${pwd_opts[@]}" -p "${port}" "${user}@${host}" "${command}"
     else
       with_timeout "${SSH_COMMAND_TIMEOUT}" \
-        run_with_askpass "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "${command}" < /dev/null
+        run_non_interactive_session_no_stdin run_with_askpass "${password}" ssh "${opts[@]}" "${pwd_opts[@]}" -p "${port}" "${user}@${host}" "${command}"
     fi
   else
     with_timeout "${SSH_COMMAND_TIMEOUT}" \
@@ -356,17 +399,19 @@ run_remote_script() {
   local user="$3"
   local password="$4"
   local -a opts
+  local -a pwd_opts
   IFS=' ' read -r -a opts <<< "$(ssh_options)"
+  IFS=' ' read -r -a pwd_opts <<< "$(password_auth_options)"
   if [[ -n "${password}" ]]; then
     if ! auth_capability_check "${password}" >/dev/null 2>&1; then
       return 97
     fi
     if (( HAVE_SSHPASS == 1 )); then
       with_timeout "${SSH_COMMAND_TIMEOUT}" \
-        sshpass -p "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "bash -s"
+        sshpass -p "${password}" ssh "${opts[@]}" "${pwd_opts[@]}" -p "${port}" "${user}@${host}" "bash -s"
     else
       with_timeout "${SSH_COMMAND_TIMEOUT}" \
-        run_with_askpass "${password}" ssh "${opts[@]}" -p "${port}" "${user}@${host}" "bash -s"
+        run_non_interactive_session_keep_stdin run_with_askpass "${password}" ssh "${opts[@]}" "${pwd_opts[@]}" -p "${port}" "${user}@${host}" "bash -s"
     fi
   else
     with_timeout "${SSH_COMMAND_TIMEOUT}" \
@@ -382,17 +427,19 @@ scp_to_remote() {
   local user="$5"
   local password="$6"
   local -a opts
+  local -a pwd_opts
   IFS=' ' read -r -a opts <<< "$(ssh_options)"
+  IFS=' ' read -r -a pwd_opts <<< "$(password_auth_options)"
   if [[ -n "${password}" ]]; then
     if ! auth_capability_check "${password}" >/dev/null 2>&1; then
       return 97
     fi
     if (( HAVE_SSHPASS == 1 )); then
       with_timeout "${SSH_COMMAND_TIMEOUT}" \
-        sshpass -p "${password}" scp "${opts[@]}" -P "${port}" "${local_file}" "${user}@${host}:${remote_path}"
+        sshpass -p "${password}" scp "${opts[@]}" "${pwd_opts[@]}" -P "${port}" "${local_file}" "${user}@${host}:${remote_path}"
     else
       with_timeout "${SSH_COMMAND_TIMEOUT}" \
-        run_with_askpass "${password}" scp "${opts[@]}" -P "${port}" "${local_file}" "${user}@${host}:${remote_path}" < /dev/null
+        run_non_interactive_session_no_stdin run_with_askpass "${password}" scp "${opts[@]}" "${pwd_opts[@]}" -P "${port}" "${local_file}" "${user}@${host}:${remote_path}"
     fi
   else
     with_timeout "${SSH_COMMAND_TIMEOUT}" \
@@ -407,6 +454,21 @@ ssh_connectivity_check() {
   local password="$4"
 
   run_ssh_command "${host}" "${port}" "${user}" "${password}" "id -u >/dev/null 2>&1"
+}
+
+ssh_connectivity_error_detail() {
+  local host="$1"
+  local port="$2"
+  local user="$3"
+  local password="$4"
+  local err
+
+  err="$(run_ssh_command "${host}" "${port}" "${user}" "${password}" "id -u >/dev/null 2>&1" 2>&1 || true)"
+  err="$(echo "${err}" | tr -d '\r' | tail -n 1 | xargs)"
+  if [[ -z "${err}" ]]; then
+    err="unknown_error"
+  fi
+  echo "${err}"
 }
 
 remote_core_binary_check() {
@@ -444,11 +506,15 @@ configure_defaults() {
   echo "- SSH command sec : ${SSH_COMMAND_TIMEOUT}"
   echo "- Auto optimize   : ${AUTO_OPTIMIZE}"
   echo "- Core binary req : /usr/local/bin/DaggerConnect on each target server"
+  echo "- Tip             : type /back to return to main menu"
   echo
 
   local input
 
   read -r -p "Tunnel port [${TUNNEL_PORT}]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   input="${input:-${TUNNEL_PORT}}"
   if ! validate_port "${input}"; then
     echo "[ERROR] Invalid tunnel port."
@@ -458,6 +524,9 @@ configure_defaults() {
   TUNNEL_PORT="${input}"
 
   read -r -p "PSK [current kept if empty]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   if [[ -n "${input}" ]]; then
     PSK="${input}"
   fi
@@ -468,6 +537,9 @@ configure_defaults() {
   fi
 
   read -r -p "Mapping protocol (tcp/udp/both) [${MAP_PROTOCOL}]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   input="${input:-${MAP_PROTOCOL}}"
   input="$(normalize_protocol "${input}")"
   if ! validate_protocol "${input}"; then
@@ -478,6 +550,9 @@ configure_defaults() {
   MAP_PROTOCOL="${input}"
 
   read -r -p "Mapping port [${MAP_PORT}]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   input="${input:-${MAP_PORT}}"
   if ! validate_port "${input}"; then
     echo "[ERROR] Invalid mapping port."
@@ -487,6 +562,9 @@ configure_defaults() {
   MAP_PORT="${input}"
 
   read -r -p "TUN+BIP dest_ip (client IP, required for bip on server) [${TUN_BIP_DEST_IP:-unset}]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   if [[ -n "${input}" ]]; then
     if ! validate_ipv4 "${input}"; then
       echo "[ERROR] Invalid IPv4 format for TUN+BIP dest_ip."
@@ -497,6 +575,9 @@ configure_defaults() {
   fi
 
   read -r -p "SSH connect timeout seconds [${SSH_CONNECT_TIMEOUT}]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   if [[ -n "${input}" ]]; then
     if [[ ! "${input}" =~ ^[0-9]+$ ]] || (( input < 3 || input > 120 )); then
       echo "[ERROR] SSH connect timeout must be between 3 and 120."
@@ -507,6 +588,9 @@ configure_defaults() {
   fi
 
   read -r -p "SSH command timeout seconds [${SSH_COMMAND_TIMEOUT}]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   if [[ -n "${input}" ]]; then
     if [[ ! "${input}" =~ ^[0-9]+$ ]] || (( input < 10 || input > 900 )); then
       echo "[ERROR] SSH command timeout must be between 10 and 900."
@@ -517,6 +601,9 @@ configure_defaults() {
   fi
 
   read -r -p "Auto optimize remote system after apply? [Y/n]: " input
+  if is_back_input "${input}"; then
+    return
+  fi
   if [[ "${input}" =~ ^[Nn]$ ]]; then
     AUTO_OPTIMIZE="false"
   elif [[ "${input}" =~ ^[Yy]$ || -z "${input}" ]]; then
@@ -536,12 +623,16 @@ add_server() {
   load_config
   print_banner
   echo "Add server"
+  echo "Type /back to return to main menu."
   echo
 
   local name host_input parsed host port user password next_id
 
   while true; do
     read -r -p "Server name (letters/numbers/-/_): " name
+    if is_back_input "${name}"; then
+      return
+    fi
     if validate_server_name "${name}"; then
       break
     fi
@@ -550,6 +641,9 @@ add_server() {
 
   while true; do
     read -r -p "Host or host:port (example: 1.2.3.4 or 1.2.3.4:22): " host_input
+    if is_back_input "${host_input}"; then
+      return
+    fi
     if parsed="$(parse_host_port "${host_input}")"; then
       host="${parsed%%|*}"
       port="${parsed##*|}"
@@ -559,13 +653,24 @@ add_server() {
   done
 
   read -r -p "SSH username [root]: " user
+  if is_back_input "${user}"; then
+    return
+  fi
   user="${user:-root}"
   if [[ "$(echo "${user}" | tr '[:upper:]' '[:lower:]')" == "root" ]]; then
     user="root"
   fi
 
-  read -r -s -p "SSH password (optional, leave empty for key auth): " password
+  read -r -s -p "SSH password: " password
   echo
+  if is_back_input "${password}"; then
+    return
+  fi
+  if [[ -z "${password}" ]]; then
+    echo "[ERROR] Password cannot be empty."
+    press_enter
+    return
+  fi
   if [[ -n "${password}" && "${HAVE_SSHPASS}" -ne 1 && "${HAVE_SETSID}" -ne 1 ]]; then
     echo "[WARN] Password auth may fail on this host (missing sshpass and setsid)."
   fi
@@ -579,7 +684,10 @@ add_server() {
   if ssh_connectivity_check "${host}" "${port}" "${user}" "${password}" >/dev/null 2>&1; then
     echo "[OK] SSH check: SUCCESS."
   else
+    local err_detail
+    err_detail="$(ssh_connectivity_error_detail "${host}" "${port}" "${user}" "${password}")"
     echo "[WARN] SSH check: FAILED. Server is still saved."
+    echo "[INFO] SSH error detail: ${err_detail}"
   fi
   press_enter
 }
@@ -591,10 +699,14 @@ edit_server() {
     press_enter
     return
   fi
+  echo "Type /back to return to main menu."
   echo
 
   local server_id line
   read -r -p "Server ID to edit: " server_id
+  if is_back_input "${server_id}"; then
+    return
+  fi
   if [[ ! "${server_id}" =~ ^[0-9]+$ ]]; then
     echo "[ERROR] Invalid ID."
     press_enter
@@ -614,6 +726,9 @@ edit_server() {
   local name host_input parsed host port user password
 
   read -r -p "Name [${old_name}]: " name
+  if is_back_input "${name}"; then
+    return
+  fi
   name="${name:-${old_name}}"
   if ! validate_server_name "${name}"; then
     echo "[ERROR] Invalid name."
@@ -622,6 +737,9 @@ edit_server() {
   fi
 
   read -r -p "Host or host:port [${old_host}:${old_port}]: " host_input
+  if is_back_input "${host_input}"; then
+    return
+  fi
   host_input="${host_input:-${old_host}:${old_port}}"
   if ! parsed="$(parse_host_port "${host_input}")"; then
     echo "[ERROR] Invalid host/port input."
@@ -632,17 +750,24 @@ edit_server() {
   port="${parsed##*|}"
 
   read -r -p "SSH username [${old_user}]: " user
+  if is_back_input "${user}"; then
+    return
+  fi
   user="${user:-${old_user}}"
   if [[ "$(echo "${user}" | tr '[:upper:]' '[:lower:]')" == "root" ]]; then
     user="root"
   fi
 
-  read -r -s -p "SSH password [keep current if empty, '-' to clear and use key auth]: " password
+  read -r -s -p "SSH password [keep current if empty]: " password
   echo
-  if [[ "${password}" == "-" ]]; then
-    password=""
-  else
-    password="${password:-${old_password}}"
+  if is_back_input "${password}"; then
+    return
+  fi
+  password="${password:-${old_password}}"
+  if [[ -z "${password}" ]]; then
+    echo "[ERROR] Password cannot be empty."
+    press_enter
+    return
   fi
   if [[ -n "${password}" && "${HAVE_SSHPASS}" -ne 1 && "${HAVE_SETSID}" -ne 1 ]]; then
     echo "[WARN] Password auth may fail on this host (missing sshpass and setsid)."
@@ -660,10 +785,14 @@ delete_server() {
     press_enter
     return
   fi
+  echo "Type /back to return to main menu."
   echo
 
   local server_id line confirm
   read -r -p "Server ID to delete: " server_id
+  if is_back_input "${server_id}"; then
+    return
+  fi
   if [[ ! "${server_id}" =~ ^[0-9]+$ ]]; then
     echo "[ERROR] Invalid ID."
     press_enter
@@ -678,6 +807,9 @@ delete_server() {
   fi
 
   read -r -p "Delete server ID=${server_id}? [y/N]: " confirm
+  if is_back_input "${confirm}"; then
+    return
+  fi
   if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
     echo "Cancelled."
     press_enter
@@ -1290,6 +1422,18 @@ apply_mode_to_all_servers() {
   fi
 
   print_banner
+  local proceed
+  echo "Type /back to cancel and return to main menu."
+  read -r -p "Continue? [Y/n]: " proceed
+  if is_back_input "${proceed}"; then
+    return
+  fi
+  if [[ "${proceed}" =~ ^[Nn]$ ]]; then
+    echo "Cancelled."
+    press_enter
+    return
+  fi
+
   if [[ "${mode}" == "quantummux" ]]; then
     echo "Applying QUANTUMMUX server config to all saved servers..."
   else
@@ -1350,6 +1494,18 @@ service_action_all() {
   fi
 
   print_banner
+  local proceed
+  echo "Type /back to cancel and return to main menu."
+  read -r -p "Run '${action}' on all saved servers? [Y/n]: " proceed
+  if is_back_input "${proceed}"; then
+    return
+  fi
+  if [[ "${proceed}" =~ ^[Nn]$ ]]; then
+    echo "Cancelled."
+    press_enter
+    return
+  fi
+
   echo "Service action '${action}' on all saved servers..."
   echo
 
@@ -1426,9 +1582,56 @@ status_all_servers() {
 }
 
 show_servers() {
-  print_banner
-  list_servers_table
-  press_enter
+  load_config
+  while true; do
+    print_banner
+    list_servers_table
+
+    if [[ ! -s "${SERVERS_FILE}" ]]; then
+      press_enter
+      return
+    fi
+
+    echo
+    read -r -p "Enter server ID to run SSH test (or press Enter to go back): " server_id
+    if [[ -z "${server_id}" ]] || is_back_input "${server_id}"; then
+      return
+    fi
+
+    if [[ ! "${server_id}" =~ ^[0-9]+$ ]]; then
+      echo "[ERROR] Invalid ID."
+      press_enter
+      continue
+    fi
+
+    local line name host port user password
+    line="$(server_line_by_id "${server_id}")"
+    if [[ -z "${line}" ]]; then
+      echo "[ERROR] Server ID not found."
+      press_enter
+      continue
+    fi
+
+    IFS=$'\t' read -r _ name host port user password <<< "${line}"
+    echo "[INFO] Testing SSH: ${name} (${host}:${port}) user=${user}"
+
+    if ! auth_capability_check "${password}" >/dev/null 2>&1; then
+      echo "[FAIL] AUTH_ERROR: password auth not supported on this host."
+      echo "[HINT] This host needs sshpass or setsid for password-based SSH."
+      press_enter
+      continue
+    fi
+
+    if ssh_connectivity_check "${host}" "${port}" "${user}" "${password}" >/dev/null 2>&1; then
+      echo "[OK] SSH connectivity test successful."
+    else
+      echo "[FAIL] SSH connectivity test failed."
+      local err_detail
+      err_detail="$(ssh_connectivity_error_detail "${host}" "${port}" "${user}" "${password}")"
+      echo "[INFO] SSH error detail: ${err_detail}"
+    fi
+    press_enter
+  done
 }
 
 main_menu() {
@@ -1449,6 +1652,7 @@ main_menu() {
     echo "12) Exit"
     echo
     echo "Current config: tunnel_port=${TUNNEL_PORT}, protocol=${MAP_PROTOCOL}, map_port=${MAP_PORT}, auto_optimize=${AUTO_OPTIMIZE}"
+    echo "Form shortcut: type /back to return to main menu."
     if (( HAVE_SSHPASS == 1 )); then
       echo "Auth mode on this host: key + password (sshpass)"
     elif (( HAVE_SETSID == 1 )); then
