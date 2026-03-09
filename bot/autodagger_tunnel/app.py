@@ -8,8 +8,10 @@ from telegram.ext import (
     filters,
 )
 
-from .settings import Settings
+from .settings import Settings, load_settings
 from .db import ServerStore, JobStore
+from .security import load_or_create_fernet
+
 from .handlers.start import start_command, help_command, whoami_command, cancel, restart_menu_from_conversation
 from .handlers.servers_handlers import (
     ADD_NAME, ADD_HOST, ADD_USERNAME, ADD_PASSWORD,
@@ -32,7 +34,8 @@ from .utils.ui import (
 def build_app(settings: Settings) -> ApplicationBuilder:
     app = ApplicationBuilder().token(settings.bot_token).build()
 
-    store = ServerStore(settings.db_path)
+    fernet = load_or_create_fernet(settings.key_file)
+    store = ServerStore(settings.db_path, fernet)
     job_store = JobStore(settings.job_db_path)
     # Expose configs globally to app context
     app.bot_data["settings"] = settings
@@ -100,3 +103,18 @@ def build_app(settings: Settings) -> ApplicationBuilder:
     app.add_handler(test_conv)
 
     return app
+
+def main() -> None:
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.INFO,
+    )
+    settings = load_settings()
+    app = build_app(settings)
+    
+    # Initialize Databases
+    app.bot_data["store"].init()
+    app.bot_data["job_store"].init()
+    
+    # Run bot
+    app.run_polling()
