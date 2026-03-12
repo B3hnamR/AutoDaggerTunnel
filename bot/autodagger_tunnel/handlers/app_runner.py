@@ -10,7 +10,7 @@ from ..runtime import get_active_jobs, get_job_store, get_settings, get_store
 from ..settings import Settings
 from ..ssh_runner import DaggerSshTester, ServerTestResult, summarize_results
 from ..models import ServerRecord
-from ..utils.ui import transport_label
+from ..utils.ui import MENU, transport_label
 from .jobs_handlers import CompactQueueLiveMessage, MODE_QUANTUMMUX, MODE_TUN_BIP, serialize_result
 
 logger = logging.getLogger(__name__)
@@ -178,7 +178,9 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
 
             summary = summarize_results(all_results, final_job.mode)
             if len(summary) <= 3500:
-                await app.bot.send_message(chat_id=chat_id, text=summary)
+                await app.bot.send_message(chat_id=chat_id, text=summary, reply_markup=MENU)
             else:
                 for index in range(0, len(summary), 3500):
-                    await app.bot.send_message(chat_id=chat_id, text=summary[index : index + 3500])
+                    chunk = summary[index : index + 3500]
+                    include_menu = (index + 3500) >= len(summary)
+                    await app.bot.send_message(chat_id=chat_id, text=chunk, reply_markup=MENU if include_menu else None)

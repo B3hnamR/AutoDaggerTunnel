@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-from ..db import ServerStore
 from ..models import ServerRecord
 from ..runtime import get_settings, get_store
 from ..utils.ui import (
+    CB_MENU_SERVERS,
+    CB_SERVER_PAGE_PREFIX,
     ICON_ADD,
     ICON_EDIT,
     ICON_FAIL,
-    ICON_LIST,
     ICON_LOCK,
     ICON_OK,
     ICON_SEARCH,
     ICON_USER,
     ICON_WARN,
     MENU,
-    build_server_list_keyboard,
+    build_server_carousel_keyboard,
     build_server_management_keyboard,
 )
 from ..utils.validators import parse_host_input, NAME_RE
@@ -45,90 +45,92 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     )
     return False
 
-# --- LIST SERVERS ---
-async def list_servers_text(store: ServerStore) -> str:
-    servers = store.list_servers()
-    if not servers:
-        return f"{ICON_LIST} No servers saved yet."
-
-    lines = [f"{ICON_LIST} Saved servers (Select Edit/Delete below):"]
-    return "\n".join(lines)
-
-
-async def _show_servers_with_actions(
+async def _render_server_page(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    *,
-    include_edit: bool,
-    include_delete: bool,
-    title: str,
+    action: str,
+    index: int,
+    edit_message: bool = False,
 ) -> None:
-    if not await check_access(update, context):
-        return
-
-    query = update.callback_query
-    if query is not None:
-        await query.answer()
-
     store = get_store(context)
     servers = store.list_servers()
 
     if not servers:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"{ICON_WARN} No servers saved yet. Please add one first.",
-            reply_markup=build_server_management_keyboard(),
-        )
+        text = f"{ICON_WARN} No servers saved yet. Please add one first."
+        reply_markup = build_server_management_keyboard()
+        if edit_message and update.callback_query:
+            await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
+        else:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=text, reply_markup=reply_markup)
         return
 
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=title)
-    for server in servers:
-        text = (
-            f"🖥 𝗦𝗲𝗿𝘃𝗲𝗿 𝗜𝗗: {server.id}\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"🏷 𝗡𝗮𝗺𝗲: {server.name}\n"
-            f"🌐 𝗛𝗼𝘀𝘁: {server.host}:{server.port}\n"
-            f"👤 𝗨𝘀𝗲𝗿: {server.username}"
-        )
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=text,
-            reply_markup=build_server_list_keyboard(
-                server.id,
-                include_edit=include_edit,
-                include_delete=include_delete,
-            ),
-        )
+    index = index % len(servers)
+    server = servers[index]
+
+    title = "📋 𝗦𝗮𝘃𝗲𝗱 𝗦𝗲𝗿𝘃𝗲𝗿𝘀"
+    if action == "edit":
+        title = "✏️ 𝗦𝗲𝗹𝗲𝗰𝘁 𝘁𝗼 𝗘𝗱𝗶𝘁"
+    elif action == "del":
+        title = "🗑 𝗦𝗲𝗹𝗲𝗰𝘁 𝘁𝗼 𝗗𝗲𝗹𝗲𝘁𝗲"
+
+    text = (
+        f"{title}\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"🖥 𝗦𝗲𝗿𝘃𝗲𝗿 𝗜𝗗: {server.id}\n"
+        f"🏷 𝗡𝗮𝗺𝗲: {server.name}\n"
+        f"🌐 𝗛𝗼𝘀𝘁: {server.host}:{server.port}\n"
+        f"👤 𝗨𝘀𝗲𝗿: {server.username}"
+    )
+
+    reply_markup = build_server_carousel_keyboard(server.id, index, len(servers), action)
+
+    if edit_message and update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
+        except Exception:
+            pass
+    else:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=text, reply_markup=reply_markup)
 
 
 async def list_servers_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _show_servers_with_actions(
-        update,
-        context,
-        include_edit=True,
-        include_delete=True,
-        title=f"{ICON_LIST} Saved servers:",
-    )
+    if not await check_access(update, context):
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    await _render_server_page(update, context, action="all", index=0, edit_message=bool(update.callback_query))
 
 
 async def list_servers_for_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _show_servers_with_actions(
-        update,
-        context,
-        include_edit=True,
-        include_delete=False,
-        title=f"{ICON_EDIT} Select a server to edit:",
-    )
+    if not await check_access(update, context):
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    await _render_server_page(update, context, action="edit", index=0, edit_message=bool(update.callback_query))
 
 
 async def list_servers_for_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _show_servers_with_actions(
-        update,
-        context,
-        include_edit=False,
-        include_delete=True,
-        title="Select a server to delete:",
-    )
+    if not await check_access(update, context):
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    await _render_server_page(update, context, action="del", index=0, edit_message=bool(update.callback_query))
+
+
+async def server_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if not await check_access(update, context):
+        return
+
+    data = query.data.replace(CB_SERVER_PAGE_PREFIX, "")
+    action, index_str = data.split("_", 1)
+    await _render_server_page(update, context, action=action, index=int(index_str), edit_message=True)
+
+
+async def ignore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
 
 
 async def server_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -355,17 +357,49 @@ async def edit_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def delete_server_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    
+
     if not await check_access(update, context):
         return
 
-    server_id_str = query.data.replace("delete_server_", "")
+    server_id_str = query.data.replace("delete_server_", "").replace("confirm_delete_", "")
+    if not server_id_str.isdigit():
+        await query.edit_message_text(f"{ICON_WARN} Invalid ID.")
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton("❌ Yes, Delete it!", callback_data=f"execute_delete_{server_id_str}"),
+            InlineKeyboardButton("🔙 Cancel", callback_data=CB_MENU_SERVERS),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        f"⚠️ 𝗔𝗿𝗲 𝘆𝗼𝘂 𝘀𝘂𝗿𝗲?\n━━━━━━━━━━━━━━━━\nDo you really want to delete Server ID: {server_id_str}?\nThis action cannot be undone.",
+        reply_markup=reply_markup,
+    )
+
+
+async def execute_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if not await check_access(update, context):
+        return
+
+    server_id_str = query.data.replace("execute_delete_", "")
     if not server_id_str.isdigit():
         await query.edit_message_text(f"{ICON_WARN} Invalid ID.")
         return
 
     ok = get_store(context).delete_server(int(server_id_str))
     if ok:
-        await query.edit_message_text(f"{ICON_OK} Server deleted.", reply_markup=build_server_management_keyboard())
+        await query.edit_message_text(
+            f"{ICON_OK} 𝗦𝗲𝗿𝘃𝗲𝗿 𝗱𝗲𝗹𝗲𝘁𝗲𝗱 𝘀𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆.",
+            reply_markup=build_server_management_keyboard(),
+        )
     else:
-        await query.edit_message_text(f"{ICON_WARN} Server not found.", reply_markup=build_server_management_keyboard())
+        await query.edit_message_text(
+            f"{ICON_WARN} Server not found or already deleted.",
+            reply_markup=build_server_management_keyboard(),
+        )

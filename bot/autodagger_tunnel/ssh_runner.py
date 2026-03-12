@@ -644,18 +644,23 @@ def summarize_results(results: Dict[str, dict], mode: str = "quantummux") -> str
     
     total = len(results)
     if total == 0:
-        return "No results."
+        return "🤷‍♂️ No results to summarize."
         
     lines = [
-        f"\U0001F4CC Tunnel Test Summary ({mode})",
-        f"\U0001F5A5\ufe0f Total servers: {total}",
-        f"\u2705 Success: {counts.get(TestStatus.SUCCESS.value, 0)}",
-        f"\U0001F4C1 Configured: {counts.get(TestStatus.CONFIGURED.value, 0)}",
-        f"\u274C Failed pattern: {counts.get(TestStatus.FAILED_PATTERN.value, 0)}",
-        f"\U0001F50E Manual review: {counts.get(TestStatus.MANUAL_REVIEW.value, 0)}",
-        f"\U0001F6AB SSH error: {counts.get(TestStatus.SSH_ERROR.value, 0)}",
-        f"\u26A0\ufe0f Setup error: {counts.get(TestStatus.SETUP_ERROR.value, 0)}",
-        f"\U0001F6D1 Cancelled: {counts.get(TestStatus.CANCELLED.value, 0)}",
+        "🏁 𝗙𝗜𝗡𝗔𝗟 𝗧𝗘𝗦𝗧 𝗦𝗨𝗠𝗠𝗔𝗥𝗬",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"⚙️ 𝗠𝗼𝗱𝗲: {mode}",
+        f"🖥 𝗧𝗼𝘁𝗮𝗹 𝗦𝗲𝗿𝘃𝗲𝗿𝘀: {total}",
+        "",
+        f"✅ 𝗦𝘂𝗰𝗰𝗲𝘀𝘀: {counts.get(TestStatus.SUCCESS.value, 0)}",
+        f"🛠 𝗖𝗼𝗻𝗳𝗶𝗴𝘂𝗿𝗲𝗱: {counts.get(TestStatus.CONFIGURED.value, 0)}",
+        f"❌ 𝗙𝗮𝗶𝗹𝗲𝗱 (𝗣𝗮𝘁𝘁𝗲𝗿𝗻): {counts.get(TestStatus.FAILED_PATTERN.value, 0)}",
+        f"🔍 𝗠𝗮𝗻𝘂𝗮𝗹 𝗥𝗲𝘃𝗶𝗲𝘄: {counts.get(TestStatus.MANUAL_REVIEW.value, 0)}",
+        f"🚫 𝗦𝗦𝗛 𝗘𝗿𝗿𝗼𝗿𝘀: {counts.get(TestStatus.SSH_ERROR.value, 0)}",
+        f"⚠️ 𝗦𝗲𝘁𝘂𝗽 𝗘𝗿𝗿𝗼𝗿𝘀: {counts.get(TestStatus.SETUP_ERROR.value, 0)}",
+        f"🛑 𝗖𝗮𝗻𝗰𝗲𝗹𝗹𝗲𝗱: {counts.get(TestStatus.CANCELLED.value, 0)}",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "💡 Tip: Check live logs for manual review targets."
     ]
     return "\n".join(lines)
 

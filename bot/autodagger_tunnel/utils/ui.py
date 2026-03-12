@@ -5,31 +5,31 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import filters
 
 # --- Icons (Modernized) ---
-ICON_OK = "✅"
-ICON_WARN = "⚠️"
-ICON_FAIL = "❌"
-ICON_INFO = "ℹ️"
-ICON_WAIT = "⏳"
-ICON_ROCKET = "🚀"
-ICON_ADD = "➕"
-ICON_LIST = "📋"
-ICON_EDIT = "✏️"
-ICON_DELETE = "🗑"
-ICON_TARGET = "🎯"
-ICON_RADAR = "📡"
-ICON_CHART = "📊"
-ICON_SEARCH = "🔍"
-ICON_LOCK = "🔐"
-ICON_USER = "👤"
-ICON_PC = "🖥"
-ICON_NOTE = "📝"
-ICON_SWITCH = "🔄"
-ICON_CANCEL = "🚫"
-ICON_ID = "🆔"
-ICON_STOP = "🛑"
-ICON_PLAY = "▶️"
-ICON_MENU = "🎛"
-ICON_BACK = "🔙"
+ICON_OK = "\u2705"
+ICON_WARN = "\u26a0\ufe0f"
+ICON_FAIL = "\u274c"
+ICON_INFO = "\u2139\ufe0f"
+ICON_WAIT = "\u23f3"
+ICON_ROCKET = "\U0001f680"
+ICON_ADD = "\u2795"
+ICON_LIST = "\U0001f4cb"
+ICON_EDIT = "\u270f\ufe0f"
+ICON_DELETE = "\U0001f5d1"
+ICON_TARGET = "\U0001f3af"
+ICON_RADAR = "\U0001f4e1"
+ICON_CHART = "\U0001f4ca"
+ICON_SEARCH = "\U0001f50d"
+ICON_LOCK = "\U0001f510"
+ICON_USER = "\U0001f464"
+ICON_PC = "\U0001f5a5"
+ICON_NOTE = "\U0001f4dd"
+ICON_SWITCH = "\U0001f504"
+ICON_CANCEL = "\U0001f6ab"
+ICON_ID = "\U0001f194"
+ICON_STOP = "\U0001f6d1"
+ICON_PLAY = "\u25b6\ufe0f"
+ICON_MENU = "\U0001f39b"
+ICON_BACK = "\U0001f519"
 
 # --- Callback Data ---
 CB_MENU_MAIN = "menu_main"
@@ -41,6 +41,7 @@ CB_SERVER_LIST = "srv_list"
 CB_SERVER_EDIT = "srv_edit"
 CB_SERVER_DELETE = "srv_delete"
 CB_SERVER_BACK = "srv_back"
+CB_SERVER_PAGE_PREFIX = "srv_page_"
 
 CB_MODE_QUANTUMMUX = "mode_quantummux"
 CB_MODE_TUN_BIP = "mode_tun_bip"
@@ -100,8 +101,8 @@ def build_server_management_keyboard() -> InlineKeyboardMarkup:
 
 def build_transport_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("⚡️ 1) QuantumMux (Auto Log Check)", callback_data=CB_MODE_QUANTUMMUX)],
-        [InlineKeyboardButton("🛡 2) TUN + BIP (Config Only)", callback_data=CB_MODE_TUN_BIP)],
+        [InlineKeyboardButton("\u26a1\ufe0f 1) QuantumMux (Auto Log Check)", callback_data=CB_MODE_QUANTUMMUX)],
+        [InlineKeyboardButton("\U0001f6e1 2) TUN + BIP (Config Only)", callback_data=CB_MODE_TUN_BIP)],
         [InlineKeyboardButton(f"{ICON_BACK} Back", callback_data=CB_MODE_BACK)],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -115,19 +116,30 @@ def build_job_stop_keyboard(job_id: str) -> InlineKeyboardMarkup:
 MENU = build_main_menu_keyboard()
 
 
-def build_server_list_keyboard(
+def build_server_carousel_keyboard(
     server_id: int,
-    *,
-    include_edit: bool = True,
-    include_delete: bool = True,
+    current_index: int,
+    total: int,
+    action: str = "all",
 ) -> InlineKeyboardMarkup:
     buttons: list[InlineKeyboardButton] = []
-    if include_edit:
+    if action in ("all", "edit"):
         buttons.append(InlineKeyboardButton(f"{ICON_EDIT} Edit", callback_data=f"edit_server_{server_id}"))
-    if include_delete:
+    if action in ("all", "del"):
         buttons.append(InlineKeyboardButton(f"{ICON_DELETE} Delete", callback_data=f"delete_server_{server_id}"))
 
-    keyboard = [buttons] if buttons else []
+    keyboard: list[list[InlineKeyboardButton]] = [buttons] if buttons else []
+
+    if total > 1:
+        prev_idx = (current_index - 1) % total
+        next_idx = (current_index + 1) % total
+        nav_buttons = [
+            InlineKeyboardButton("\u2b05\ufe0f Prev", callback_data=f"{CB_SERVER_PAGE_PREFIX}{action}_{prev_idx}"),
+            InlineKeyboardButton(f"\U0001f4c4 {current_index + 1} / {total}", callback_data="ignore"),
+            InlineKeyboardButton("Next \u27a1\ufe0f", callback_data=f"{CB_SERVER_PAGE_PREFIX}{action}_{next_idx}"),
+        ]
+        keyboard.append(nav_buttons)
+
     keyboard.append([InlineKeyboardButton(f"{ICON_BACK} Back to Servers", callback_data=CB_MENU_SERVERS)])
     return InlineKeyboardMarkup(keyboard)
 

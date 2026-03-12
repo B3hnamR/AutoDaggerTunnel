@@ -260,7 +260,7 @@ class CompactQueueLiveMessage:
 
     def _reply_markup(self):
         if self.current_state in {"queue_done", "queue_stopped"}:
-            return None
+            return MENU
         return build_job_stop_keyboard(self.job_id)
 
     def _extract_event(self, line: str) -> tuple[str, str] | None:

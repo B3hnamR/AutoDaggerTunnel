@@ -27,6 +27,7 @@ from ..utils.ui import (
     CB_SERVER_DELETE,
     CB_SERVER_EDIT,
     CB_SERVER_LIST,
+    CB_SERVER_PAGE_PREFIX,
     MENU_BUTTON_FILTER,
     STATE_TEXT_FILTER,
 )
@@ -56,14 +57,17 @@ from .servers_handlers import (
     add_start_callback,
     add_username,
     delete_server_callback,
+    execute_delete_callback,
     edit_host,
     edit_name,
     edit_password,
     edit_server_callback,
     edit_username,
+    ignore_callback,
     list_servers_for_delete,
     list_servers_for_edit,
     list_servers_button,
+    server_page_callback,
     server_management_menu,
 )
 from .start import (
@@ -88,6 +92,8 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(list_servers_button, pattern=rf"^{CB_SERVER_LIST}$"), group=1)
     app.add_handler(CallbackQueryHandler(list_servers_for_edit, pattern=rf"^{CB_SERVER_EDIT}$"), group=1)
     app.add_handler(CallbackQueryHandler(list_servers_for_delete, pattern=rf"^{CB_SERVER_DELETE}$"), group=1)
+    app.add_handler(CallbackQueryHandler(server_page_callback, pattern=rf"^{CB_SERVER_PAGE_PREFIX}"), group=1)
+    app.add_handler(CallbackQueryHandler(ignore_callback, pattern=r"^ignore$"), group=1)
     app.add_handler(CallbackQueryHandler(stop_current_job, pattern=rf"^{CB_JOB_STOP_PREFIX}"), group=1)
 
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_LIST}$"), list_servers_button))
@@ -96,6 +102,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_STOP}$"), stop_current_job))
 
     app.add_handler(CallbackQueryHandler(delete_server_callback, pattern=r"^delete_server_"))
+    app.add_handler(CallbackQueryHandler(execute_delete_callback, pattern=r"^execute_delete_"))
 
     add_conv = ConversationHandler(
         entry_points=[
