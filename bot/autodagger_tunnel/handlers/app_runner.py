@@ -10,6 +10,7 @@ from ..runtime import get_active_jobs, get_job_store, get_settings, get_store
 from ..settings import Settings
 from ..ssh_runner import DaggerSshTester, ServerTestResult, summarize_results
 from ..models import ServerRecord
+from ..utils.ui import transport_label
 from .jobs_handlers import CompactQueueLiveMessage, MODE_QUANTUMMUX, MODE_TUN_BIP, serialize_result
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
         job_id=job_id,
         target_total=len(job.targets),
         server_total=server_total,
-        mode_label=MODE_QUANTUMMUX if job.mode == MODE_QUANTUMMUX else MODE_TUN_BIP,
+        mode_label=transport_label(job.mode),
         show_counters=(job.mode == MODE_QUANTUMMUX),
     )
     await live_msg.start()

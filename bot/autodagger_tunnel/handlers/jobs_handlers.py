@@ -14,7 +14,10 @@ from ..models import JobRecord, ServerRecord
 from ..runtime import ActiveJobContext, get_active_jobs, get_job_store
 from ..ssh_runner import ServerTestResult, TestStatus
 from ..utils.ui import (
-    BTN_STOP,
+    CB_JOB_STOP_PREFIX,
+    CB_MODE_BACK,
+    CB_MODE_QUANTUMMUX,
+    CB_MODE_TUN_BIP,
     ICON_CHART,
     ICON_ID,
     ICON_INFO,
@@ -23,12 +26,13 @@ from ..utils.ui import (
     ICON_PC,
     ICON_PLAY,
     ICON_RADAR,
-    ICON_ROCKET,
     ICON_STOP,
     ICON_TARGET,
     ICON_WAIT,
     ICON_WARN,
     MENU,
+    build_job_stop_keyboard,
+    build_transport_keyboard,
     transport_label,
 )
 from ..utils.validators import parse_targets_input, parse_transport_choice
@@ -114,7 +118,11 @@ class CompactQueueLiveMessage:
         self.target_setup = 0
 
     async def start(self) -> None:
-        msg = await self.app.bot.send_message(chat_id=self.chat_id, text=self._render())
+        msg = await self.app.bot.send_message(
+            chat_id=self.chat_id,
+            text=self._render(),
+            reply_markup=self._reply_markup(),
+        )
         self.message_id = msg.message_id
 
     async def begin_target(self, target_index: int, target: str) -> None:
@@ -217,6 +225,7 @@ class CompactQueueLiveMessage:
                 chat_id=self.chat_id,
                 message_id=self.message_id,
                 text=self._render(),
+                reply_markup=self._reply_markup(),
             )
             self.last_flush = now
         except BadRequest as exc:
@@ -230,7 +239,7 @@ class CompactQueueLiveMessage:
         progress_bar = generate_progress_bar(self.target_done, self.server_total)
 
         lines = [
-            f"{ICON_RADAR} Tunnel test live status",
+            f"{ICON_RADAR} Live Tunnel Status",
             f"{ICON_ID} Job ID: {self.job_id}",
             f"{ICON_NOTE} Mode: {self.mode_label}",
             f"{ICON_TARGET} Target: {self.target_index}/{self.target_total} -> {self.current_target}",
@@ -241,7 +250,7 @@ class CompactQueueLiveMessage:
         ]
         if self.show_counters:
             lines.append(
-                f"{ICON_CHART} Counters: c={self.connected_count} d={self.disconnected_count} "
+                f"{ICON_CHART} Signals: c={self.connected_count} d={self.disconnected_count} "
                 f"r={self.reconnect_count} s0={self.streams_zero_count} oom={self.oom_count}"
             )
         lines.extend(
@@ -252,6 +261,11 @@ class CompactQueueLiveMessage:
             ]
         )
         return "\n".join(lines)
+
+    def _reply_markup(self):
+        if self.current_state in {"queue_done", "queue_stopped"}:
+            return None
+        return build_job_stop_keyboard(self.job_id)
 
     def _extract_event(self, line: str) -> tuple[str, str] | None:
         lower = line.lower()
@@ -291,16 +305,25 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
-    await update.effective_message.reply_text(
-        f"{ICON_NOTE} Select tunnel mode:\n"
-        "1) quantummux (auto log check)\n"
-        "2) tun + bip (config only, manual test)"
-    )
+    await update.effective_message.reply_text("Select tunnel mode:", reply_markup=build_transport_keyboard())
     return TEST_TRANSPORT
 
 
 async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    mode = parse_transport_choice(update.effective_message.text)
+    mode: Optional[str] = None
+    query = update.callback_query
+    if query is not None:
+        await query.answer()
+        if query.data == CB_MODE_QUANTUMMUX:
+            mode = MODE_QUANTUMMUX
+        elif query.data == CB_MODE_TUN_BIP:
+            mode = MODE_TUN_BIP
+        elif query.data == CB_MODE_BACK:
+            await query.edit_message_text("Main menu:", reply_markup=MENU)
+            return ConversationHandler.END
+    else:
+        mode = parse_transport_choice(update.effective_message.text)
+
     if mode is None:
         await update.effective_message.reply_text(
             f"{ICON_WARN} Invalid mode. Send 1 for quantummux or 2 for tun+bip."
@@ -308,11 +331,14 @@ async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_T
         return TEST_TRANSPORT
 
     context.user_data["test_mode"] = mode
-    await update.effective_message.reply_text(
-        f"{ICON_TARGET} Send one or multiple target address:port values.\n"
-        "Examples:\n"
-        "- 203.0.113.10:443\n"
-        "- 203.0.113.10:443, 198.51.100.20:8443"
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            f"{ICON_TARGET} Send one or multiple target address:port values.\n"
+            "Examples:\n"
+            "- 203.0.113.10:443\n"
+            "- 203.0.113.10:443, 198.51.100.20:8443"
+        ),
     )
     return TEST_TARGET
 
@@ -351,14 +377,6 @@ async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     runtime.task = task
     active_jobs[chat_id] = runtime
 
-    await update.effective_message.reply_text(
-        f"{ICON_ROCKET} Queue started in mode: {transport_label(mode)}\n"
-        f"{ICON_ID} Job ID: {job.job_id}\n"
-        f"{ICON_PLAY} Use /resume {job.job_id} if bot restarts.\n"
-        f"{ICON_STOP} Use '{BTN_STOP}' to stop this job.",
-        reply_markup=MENU,
-    )
-
     return ConversationHandler.END
 
 
@@ -368,22 +386,32 @@ async def stop_current_job(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     chat_id = update.effective_chat.id
     runtime = get_active_jobs(context).get(chat_id)
+    query = update.callback_query
+    if query is not None:
+        await query.answer()
+        if query.data and query.data.startswith(CB_JOB_STOP_PREFIX):
+            requested_job_id = query.data[len(CB_JOB_STOP_PREFIX) :]
+            if runtime is not None and runtime.job_id != requested_job_id:
+                await context.bot.send_message(chat_id=chat_id, text=f"{ICON_WARN} Job mismatch. Active: {runtime.job_id}")
+                return
+
     if runtime is None:
-        await update.effective_message.reply_text(f"{ICON_INFO} No active job in this chat.", reply_markup=MENU)
+        await context.bot.send_message(chat_id=chat_id, text=f"{ICON_INFO} No active job in this chat.", reply_markup=MENU)
         return
 
     if runtime.stop_event.is_set():
-        await update.effective_message.reply_text(
-            f"{ICON_WAIT} Stop already requested for job {runtime.job_id}.",
-            reply_markup=MENU,
-        )
+        await context.bot.send_message(chat_id=chat_id, text=f"{ICON_WAIT} Stop already requested for job {runtime.job_id}.")
         return
 
     runtime.stop_event.set()
-    await update.effective_message.reply_text(
-        f"{ICON_STOP} Immediate Stop requested for job {runtime.job_id}. Actively terminating SSH sessions...",
-        reply_markup=MENU,
-    )
+    await context.bot.send_message(chat_id=chat_id, text=f"{ICON_STOP} Stop requested for job {runtime.job_id}.")
+
+
+async def test_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is not None:
+        await query.answer()
+    return await test_start(update, context)
 
 
 async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

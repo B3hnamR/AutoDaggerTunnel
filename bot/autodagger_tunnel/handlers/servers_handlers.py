@@ -7,8 +7,18 @@ from ..db import ServerStore
 from ..models import ServerRecord
 from ..runtime import get_settings, get_store
 from ..utils.ui import (
-    ICON_ADD, ICON_WARN, ICON_USER, ICON_LOCK, ICON_OK, ICON_SEARCH, ICON_FAIL,
-    ICON_EDIT, ICON_LIST, MENU, build_server_list_keyboard
+    ICON_ADD,
+    ICON_EDIT,
+    ICON_FAIL,
+    ICON_LIST,
+    ICON_LOCK,
+    ICON_OK,
+    ICON_SEARCH,
+    ICON_USER,
+    ICON_WARN,
+    MENU,
+    build_server_list_keyboard,
+    build_server_management_keyboard,
 )
 from ..utils.validators import parse_host_input, NAME_RE
 from ..ssh_runner import run_ssh_connectivity_check
@@ -45,24 +55,94 @@ async def list_servers_text(store: ServerStore) -> str:
     return "\n".join(lines)
 
 
-async def list_servers_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _show_servers_with_actions(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    include_edit: bool,
+    include_delete: bool,
+    title: str,
+) -> None:
     if not await check_access(update, context):
         return
-        
+
+    query = update.callback_query
+    if query is not None:
+        await query.answer()
+
     store = get_store(context)
     servers = store.list_servers()
-    
+
     if not servers:
-        await update.effective_message.reply_text(f"{ICON_LIST} No servers saved yet.", reply_markup=MENU)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"{ICON_LIST} No servers saved yet.",
+            reply_markup=build_server_management_keyboard(),
+        )
         return
-        
-    await update.effective_message.reply_text(f"{ICON_LIST} Saved servers:")
+
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=title)
     for server in servers:
         text = f"ID: {server.id} | Name: {server.name}\nHost: {server.host}:{server.port}\nUser: {server.username}"
-        await update.effective_message.reply_text(
-            text, 
-            reply_markup=build_server_list_keyboard(server.id)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=build_server_list_keyboard(
+                server.id,
+                include_edit=include_edit,
+                include_delete=include_delete,
+            ),
         )
+
+
+async def list_servers_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _show_servers_with_actions(
+        update,
+        context,
+        include_edit=True,
+        include_delete=True,
+        title=f"{ICON_LIST} Saved servers:",
+    )
+
+
+async def list_servers_for_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _show_servers_with_actions(
+        update,
+        context,
+        include_edit=True,
+        include_delete=False,
+        title=f"{ICON_EDIT} Select a server to edit:",
+    )
+
+
+async def list_servers_for_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _show_servers_with_actions(
+        update,
+        context,
+        include_edit=False,
+        include_delete=True,
+        title="Select a server to delete:",
+    )
+
+
+async def server_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await check_access(update, context):
+        return
+
+    query = update.callback_query
+    if query is not None:
+        await query.answer()
+        await query.edit_message_text("Server management:", reply_markup=build_server_management_keyboard())
+        return
+
+    await update.effective_message.reply_text("Server management:", reply_markup=build_server_management_keyboard())
+
+
+async def add_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is not None:
+        await query.answer()
+    return await add_start(update, context)
 
 
 # --- ADD SERVER ---
@@ -115,7 +195,7 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     try:
         server_id = store.add_server(name=name, host=host, port=port, username=username, password=password)
     except Exception as exc: 
-        await update.effective_message.reply_text(f"Failed to save server: {exc}", reply_markup=MENU)
+        await update.effective_message.reply_text(f"Failed to save server: {exc}", reply_markup=build_server_management_keyboard())
         return ConversationHandler.END
 
     await update.effective_message.reply_text(
@@ -145,7 +225,7 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "Server is still saved (as requested)."
         )
 
-    await update.effective_message.reply_text(check_text, reply_markup=MENU)
+    await update.effective_message.reply_text(check_text, reply_markup=build_server_management_keyboard())
     return ConversationHandler.END
 
 
@@ -159,12 +239,12 @@ async def edit_server_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     server_id_str = query.data.replace("edit_server_", "")
     if not server_id_str.isdigit():
-        await query.edit_message_text(f"{ICON_WARN} Invalid ID.")
+        await query.edit_message_text(f"{ICON_WARN} Invalid ID.", reply_markup=build_server_management_keyboard())
         return ConversationHandler.END
 
     server = get_store(context).get_server(int(server_id_str))
     if server is None:
-        await query.edit_message_text(f"{ICON_WARN} Server not found.")
+        await query.edit_message_text(f"{ICON_WARN} Server not found.", reply_markup=build_server_management_keyboard())
         return ConversationHandler.END
 
     context.user_data["edit_server"] = server
@@ -255,14 +335,14 @@ async def edit_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             password=password,
         )
     except Exception as exc: 
-        await update.effective_message.reply_text(f"Edit failed: {exc}", reply_markup=MENU)
+        await update.effective_message.reply_text(f"Edit failed: {exc}", reply_markup=build_server_management_keyboard())
         return ConversationHandler.END
 
     if not ok:
-        await update.effective_message.reply_text(f"{ICON_WARN} Server no longer exists.", reply_markup=MENU)
+        await update.effective_message.reply_text(f"{ICON_WARN} Server no longer exists.", reply_markup=build_server_management_keyboard())
         return ConversationHandler.END
 
-    await update.effective_message.reply_text(f"{ICON_OK} Server updated.", reply_markup=MENU)
+    await update.effective_message.reply_text(f"{ICON_OK} Server updated.", reply_markup=build_server_management_keyboard())
     return ConversationHandler.END
 
 # --- DELETE SERVER (Via Inline Button Callback) ---
@@ -280,6 +360,6 @@ async def delete_server_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     ok = get_store(context).delete_server(int(server_id_str))
     if ok:
-        await query.edit_message_text(f"{ICON_OK} Server deleted.")
+        await query.edit_message_text(f"{ICON_OK} Server deleted.", reply_markup=build_server_management_keyboard())
     else:
-        await query.edit_message_text(f"{ICON_WARN} Server not found.")
+        await query.edit_message_text(f"{ICON_WARN} Server not found.", reply_markup=build_server_management_keyboard())

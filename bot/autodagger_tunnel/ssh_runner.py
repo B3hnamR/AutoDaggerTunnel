@@ -638,7 +638,7 @@ class DaggerSshTester:
 
 
 def summarize_results(results: Dict[str, dict], mode: str = "quantummux") -> str:
-    """Creates a markdown formatted summary of test results."""
+    """Creates a compact, user-facing summary of test results."""
     from collections import Counter
     counts = Counter(r.get("status") for r in results.values())
     
@@ -647,15 +647,15 @@ def summarize_results(results: Dict[str, dict], mode: str = "quantummux") -> str
         return "No results."
         
     lines = [
-        f"Tunnel Test Summary ({mode})",
-        f"Total Servers: {total}",
-        f"Success: {counts.get(TestStatus.SUCCESS.value, 0)}",
-        f"Configured: {counts.get(TestStatus.CONFIGURED.value, 0)}",
-        f"Failed Pattern: {counts.get(TestStatus.FAILED_PATTERN.value, 0)}",
-        f"Manual Review: {counts.get(TestStatus.MANUAL_REVIEW.value, 0)}",
-        f"SSH Err: {counts.get(TestStatus.SSH_ERROR.value, 0)}",
-        f"Setup Err: {counts.get(TestStatus.SETUP_ERROR.value, 0)}",
-        f"Cancelled: {counts.get(TestStatus.CANCELLED.value, 0)}",
+        f"\U0001F4CC Tunnel Test Summary ({mode})",
+        f"\U0001F5A5\ufe0f Total servers: {total}",
+        f"\u2705 Success: {counts.get(TestStatus.SUCCESS.value, 0)}",
+        f"\U0001F4C1 Configured: {counts.get(TestStatus.CONFIGURED.value, 0)}",
+        f"\u274C Failed pattern: {counts.get(TestStatus.FAILED_PATTERN.value, 0)}",
+        f"\U0001F50E Manual review: {counts.get(TestStatus.MANUAL_REVIEW.value, 0)}",
+        f"\U0001F6AB SSH error: {counts.get(TestStatus.SSH_ERROR.value, 0)}",
+        f"\u26A0\ufe0f Setup error: {counts.get(TestStatus.SETUP_ERROR.value, 0)}",
+        f"\U0001F6D1 Cancelled: {counts.get(TestStatus.CANCELLED.value, 0)}",
     ]
     return "\n".join(lines)
 

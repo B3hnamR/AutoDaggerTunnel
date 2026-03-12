@@ -16,6 +16,17 @@ from ..utils.ui import (
     BTN_LIST,
     BTN_STOP,
     BTN_TEST,
+    CB_JOB_STOP_PREFIX,
+    CB_MENU_MAIN,
+    CB_MENU_SERVERS,
+    CB_MENU_TEST,
+    CB_MODE_BACK,
+    CB_MODE_QUANTUMMUX,
+    CB_MODE_TUN_BIP,
+    CB_SERVER_ADD,
+    CB_SERVER_DELETE,
+    CB_SERVER_EDIT,
+    CB_SERVER_LIST,
     MENU_BUTTON_FILTER,
     STATE_TEXT_FILTER,
 )
@@ -24,6 +35,7 @@ from .jobs_handlers import (
     TEST_TRANSPORT,
     resume_command,
     stop_current_job,
+    test_start_callback,
     test_receive_target,
     test_receive_transport,
     test_start,
@@ -41,6 +53,7 @@ from .servers_handlers import (
     add_name,
     add_password,
     add_start,
+    add_start_callback,
     add_username,
     delete_server_callback,
     edit_host,
@@ -48,9 +61,20 @@ from .servers_handlers import (
     edit_password,
     edit_server_callback,
     edit_username,
+    list_servers_for_delete,
+    list_servers_for_edit,
     list_servers_button,
+    server_management_menu,
 )
-from .start import cancel, help_command, restart_menu_from_conversation, start_command, whoami_command
+from .start import (
+    cancel,
+    help_command,
+    main_menu_callback,
+    restart_menu_from_conversation,
+    restart_menu_from_conversation_callback,
+    start_command,
+    whoami_command,
+)
 
 
 def register_handlers(app: Application) -> None:
@@ -59,15 +83,25 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("whoami", whoami_command))
     app.add_handler(CommandHandler("resume", resume_command))
 
+    app.add_handler(CallbackQueryHandler(main_menu_callback, pattern=rf"^{CB_MENU_MAIN}$"), group=1)
+    app.add_handler(CallbackQueryHandler(server_management_menu, pattern=rf"^{CB_MENU_SERVERS}$"), group=1)
+    app.add_handler(CallbackQueryHandler(list_servers_button, pattern=rf"^{CB_SERVER_LIST}$"), group=1)
+    app.add_handler(CallbackQueryHandler(list_servers_for_edit, pattern=rf"^{CB_SERVER_EDIT}$"), group=1)
+    app.add_handler(CallbackQueryHandler(list_servers_for_delete, pattern=rf"^{CB_SERVER_DELETE}$"), group=1)
+    app.add_handler(CallbackQueryHandler(stop_current_job, pattern=rf"^{CB_JOB_STOP_PREFIX}"), group=1)
+
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_LIST}$"), list_servers_button))
-    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_EDIT}$"), list_servers_button))
-    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_DELETE}$"), list_servers_button))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_EDIT}$"), list_servers_for_edit))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_DELETE}$"), list_servers_for_delete))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_STOP}$"), stop_current_job))
 
     app.add_handler(CallbackQueryHandler(delete_server_callback, pattern=r"^delete_server_"))
 
     add_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{BTN_ADD}$"), add_start)],
+        entry_points=[
+            MessageHandler(filters.Regex(f"^{BTN_ADD}$"), add_start),
+            CallbackQueryHandler(add_start_callback, pattern=rf"^{CB_SERVER_ADD}$"),
+        ],
         states={
             ADD_NAME: [MessageHandler(STATE_TEXT_FILTER, add_name)],
             ADD_HOST: [MessageHandler(STATE_TEXT_FILTER, add_host)],
@@ -77,7 +111,9 @@ def register_handlers(app: Application) -> None:
         fallbacks=[
             CommandHandler("cancel", cancel),
             MessageHandler(MENU_BUTTON_FILTER, restart_menu_from_conversation),
+            CallbackQueryHandler(restart_menu_from_conversation_callback, pattern=r"^(menu_|srv_)"),
         ],
+        allow_reentry=True,
     )
     app.add_handler(add_conv)
 
@@ -92,19 +128,29 @@ def register_handlers(app: Application) -> None:
         fallbacks=[
             CommandHandler("cancel", cancel),
             MessageHandler(MENU_BUTTON_FILTER, restart_menu_from_conversation),
+            CallbackQueryHandler(restart_menu_from_conversation_callback, pattern=r"^(menu_|srv_)"),
         ],
+        allow_reentry=True,
     )
     app.add_handler(edit_conv)
 
     test_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{BTN_TEST}$"), test_start)],
+        entry_points=[
+            MessageHandler(filters.Regex(f"^{BTN_TEST}$"), test_start),
+            CallbackQueryHandler(test_start_callback, pattern=rf"^{CB_MENU_TEST}$"),
+        ],
         states={
-            TEST_TRANSPORT: [MessageHandler(STATE_TEXT_FILTER, test_receive_transport)],
+            TEST_TRANSPORT: [
+                CallbackQueryHandler(test_receive_transport, pattern=rf"^({CB_MODE_QUANTUMMUX}|{CB_MODE_TUN_BIP}|{CB_MODE_BACK})$"),
+                MessageHandler(STATE_TEXT_FILTER, test_receive_transport),
+            ],
             TEST_TARGET: [MessageHandler(STATE_TEXT_FILTER, test_receive_target)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
             MessageHandler(MENU_BUTTON_FILTER, restart_menu_from_conversation),
+            CallbackQueryHandler(restart_menu_from_conversation_callback, pattern=r"^(menu_|srv_|mode_)"),
         ],
+        allow_reentry=True,
     )
     app.add_handler(test_conv)

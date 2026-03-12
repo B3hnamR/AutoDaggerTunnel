@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-from telegram import Update
+from telegram import ReplyKeyboardRemove, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from ..runtime import get_settings
-from ..utils.ui import ICON_OK, ICON_ID, ICON_CANCEL, MENU
+from ..utils.ui import (
+    ICON_CANCEL,
+    ICON_ID,
+    ICON_OK,
+    MENU,
+)
 from .servers_handlers import check_access
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await check_access(update, context):
         return
+
+    await update.effective_message.reply_text("Loading menu...", reply_markup=ReplyKeyboardRemove())
 
     settings = get_settings(context)
     mode_line = (
@@ -20,7 +27,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     text = (
         f"{ICON_OK} AutoDagger Tunnel bot is online.\n"
         f"{mode_line}\n"
-        "Use the menu buttons below."
+        "Use the inline menu below."
     )
     await update.effective_message.reply_text(text, reply_markup=MENU)
 
@@ -42,7 +49,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "3) Select tunnel mode (quantummux or tun+bip)\n"
         "4) Enter one or more target address:port values\n"
         "5) Bot runs queue and sends final summary\n"
-        "6) Use 'Stop Current Job' any time to stop gracefully"
+        "6) Use inline Stop button on the live status panel"
     )
     await update.effective_message.reply_text(text, reply_markup=MENU)
 
@@ -58,6 +65,30 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(f"{ICON_CANCEL} Cancelled.", reply_markup=MENU)
     return ConversationHandler.END
 
+
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await check_access(update, context):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    await query.edit_message_text("Main menu:", reply_markup=MENU)
+
+
 async def restart_menu_from_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await start_command(update, context)
+    return ConversationHandler.END
+
+
+async def restart_menu_from_conversation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is not None:
+        await query.answer("Current process cancelled.")
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Current process was cancelled.\nUse the menu below.",
+        reply_markup=MENU,
+    )
     return ConversationHandler.END
