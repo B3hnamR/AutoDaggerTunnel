@@ -49,6 +49,8 @@ CB_MODE_TUN_BIP = "mode_tun_bip"
 CB_MODE_BACK = "mode_back"
 
 CB_JOB_STOP_PREFIX = "job_stop:"
+CB_TEST_SERVER_ALL = "test_srv_all"
+CB_TEST_SERVER_PREFIX = "test_srv_item_"
 
 # --- Legacy message buttons ---
 BTN_TEST = f"{ICON_ROCKET} Start Tunnel Test"
@@ -102,8 +104,8 @@ def build_server_management_keyboard() -> InlineKeyboardMarkup:
 
 def build_transport_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("\u26a1\ufe0f 1) QuantumMux (Auto Log Check)", callback_data=CB_MODE_QUANTUMMUX)],
-        [InlineKeyboardButton("\U0001f6e1 2) TUN + BIP (Config Only)", callback_data=CB_MODE_TUN_BIP)],
+        [InlineKeyboardButton("⚡️ 1) QuantumMux (Auto Log Check)", callback_data=CB_MODE_QUANTUMMUX)],
+        [InlineKeyboardButton("🛡 2) TUN + BIP (Config Only)", callback_data=CB_MODE_TUN_BIP)],
         [InlineKeyboardButton(f"{ICON_BACK} Back", callback_data=CB_MODE_BACK)],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -111,6 +113,18 @@ def build_transport_keyboard() -> InlineKeyboardMarkup:
 
 def build_job_stop_keyboard(job_id: str) -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton(f"{ICON_STOP} Abort Current Job", callback_data=f"{CB_JOB_STOP_PREFIX}{job_id}")]]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_test_server_selection_keyboard(servers: list) -> InlineKeyboardMarkup:
+    keyboard = []
+    keyboard.append([InlineKeyboardButton("🌐 𝗥𝘂𝗻 𝗼𝗻 𝗔𝗟𝗟 𝗦𝗲𝗿𝘃𝗲𝗿𝘀", callback_data=CB_TEST_SERVER_ALL)])
+
+    for srv in servers:
+        btn_text = f"🖥 {srv.name} ({srv.host})"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"{CB_TEST_SERVER_PREFIX}{srv.id}")])
+
+    keyboard.append([InlineKeyboardButton(f"{ICON_CANCEL} Cancel", callback_data=CB_MODE_BACK)])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -123,29 +137,26 @@ def build_server_carousel_keyboard(
     total: int,
     action: str = "all",
 ) -> InlineKeyboardMarkup:
-    keyboard: list[list[InlineKeyboardButton]] = []
-    action_buttons: list[InlineKeyboardButton] = []
+    keyboard = []
 
+    action_buttons = []
     if action in ("all", "edit"):
         action_buttons.append(InlineKeyboardButton(f"{ICON_EDIT} Edit", callback_data=f"edit_server_{server_id}"))
     if action in ("all", "del"):
         action_buttons.append(InlineKeyboardButton(f"{ICON_DELETE} Delete", callback_data=f"delete_server_{server_id}"))
-
     if action_buttons:
         keyboard.append(action_buttons)
 
     if action == "all":
-        keyboard.append(
-            [InlineKeyboardButton("🔄 Test SSH Connection", callback_data=f"{CB_SERVER_CHECK_PREFIX}{server_id}_{current_index}")]
-        )
+        keyboard.append([InlineKeyboardButton("🔄 Test SSH Connection", callback_data=f"{CB_SERVER_CHECK_PREFIX}{server_id}_{current_index}")])
 
     if total > 1:
         prev_idx = (current_index - 1) % total
         next_idx = (current_index + 1) % total
         nav_buttons = [
-            InlineKeyboardButton("\u2b05\ufe0f Prev", callback_data=f"{CB_SERVER_PAGE_PREFIX}{action}_{prev_idx}"),
-            InlineKeyboardButton(f"\U0001f4c4 {current_index + 1} / {total}", callback_data="ignore"),
-            InlineKeyboardButton("Next \u27a1\ufe0f", callback_data=f"{CB_SERVER_PAGE_PREFIX}{action}_{next_idx}"),
+            InlineKeyboardButton("⬅️ Prev", callback_data=f"{CB_SERVER_PAGE_PREFIX}{action}_{prev_idx}"),
+            InlineKeyboardButton(f"📄 {current_index + 1} / {total}", callback_data="ignore"),
+            InlineKeyboardButton("Next ➡️", callback_data=f"{CB_SERVER_PAGE_PREFIX}{action}_{next_idx}"),
         ]
         keyboard.append(nav_buttons)
 
@@ -154,6 +165,7 @@ def build_server_carousel_keyboard(
 
 
 def transport_label(mode: str) -> str:
-    if mode == "tun_bip":
+    base_mode = mode.split(":")[0] if ":" in mode else mode
+    if base_mode == "tun_bip":
         return "TUN + BIP"
     return "QuantumMux"

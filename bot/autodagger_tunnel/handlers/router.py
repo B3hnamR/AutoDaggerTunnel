@@ -34,9 +34,11 @@ from ..utils.ui import (
 )
 from .jobs_handlers import (
     TEST_TARGET,
+    TEST_SERVER_SELECT,
     TEST_TRANSPORT,
     resume_command,
     stop_current_job,
+    test_receive_server_selection,
     test_start_callback,
     test_receive_target,
     test_receive_transport,
@@ -153,6 +155,9 @@ def register_handlers(app: Application) -> None:
             TEST_TRANSPORT: [
                 CallbackQueryHandler(test_receive_transport, pattern=rf"^({CB_MODE_QUANTUMMUX}|{CB_MODE_TUN_BIP}|{CB_MODE_BACK})$"),
                 MessageHandler(STATE_TEXT_FILTER, test_receive_transport),
+            ],
+            TEST_SERVER_SELECT: [
+                CallbackQueryHandler(test_receive_server_selection, pattern=r"^(test_srv_.*)$"),
             ],
             TEST_TARGET: [MessageHandler(STATE_TEXT_FILTER, test_receive_target)],
         },

@@ -18,23 +18,25 @@ from ..utils.ui import (
     CB_MODE_BACK,
     CB_MODE_QUANTUMMUX,
     CB_MODE_TUN_BIP,
+    CB_TEST_SERVER_ALL,
+    CB_TEST_SERVER_PREFIX,
     ICON_INFO,
     ICON_LIST,
     ICON_PLAY,
     ICON_RADAR,
     ICON_STOP,
-    ICON_TARGET,
     ICON_WAIT,
     ICON_WARN,
     MENU,
     build_job_stop_keyboard,
+    build_test_server_selection_keyboard,
     build_transport_keyboard,
     transport_label,
 )
 from ..utils.validators import parse_targets_input, parse_transport_choice
 from .servers_handlers import check_access, get_store
 
-TEST_TRANSPORT, TEST_TARGET = range(10, 12)
+TEST_TRANSPORT, TEST_SERVER_SELECT, TEST_TARGET = range(10, 13)
 MODE_QUANTUMMUX = "quantummux"
 MODE_TUN_BIP = "tun_bip"
 ATTEMPT_RE = re.compile(r"attempt #(\d+)", re.IGNORECASE)
@@ -327,15 +329,53 @@ async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_T
         return TEST_TRANSPORT
 
     context.user_data["test_mode"] = mode
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=(
-            f"{ICON_TARGET} Send one or multiple target address:port values.\n"
-            "Examples:\n"
-            "- 203.0.113.10:443\n"
-            "- 203.0.113.10:443, 198.51.100.20:8443"
-        ),
+
+    servers = get_store(context).list_servers()
+    if not servers:
+        await update.effective_message.reply_text(f"{ICON_WARN} No servers found.")
+        return ConversationHandler.END
+
+    text = (
+        "🎯 <b>𝗦𝗲𝗿𝘃𝗲𝗿 𝗦𝗲𝗹𝗲𝗰𝘁𝗶𝗼𝗻</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Where do you want to run this tunnel test?\n"
+        "Choose <b>All Servers</b> or select a specific one:"
     )
+
+    reply_markup = build_test_server_selection_keyboard(servers)
+
+    if query:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(text=text, reply_markup=reply_markup, parse_mode="HTML")
+
+    return TEST_SERVER_SELECT
+
+
+async def test_receive_server_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == CB_TEST_SERVER_ALL:
+        context.user_data["test_server_id"] = "all"
+        target_text = "🌐 𝗔𝗹𝗹 𝗦𝗲𝗿𝘃𝗲𝗿𝘀"
+    elif query.data.startswith(CB_TEST_SERVER_PREFIX):
+        srv_id = query.data.replace(CB_TEST_SERVER_PREFIX, "")
+        context.user_data["test_server_id"] = srv_id
+        target_text = f"🖥 𝗦𝗲𝗿𝘃𝗲𝗿 𝗜𝗗: {srv_id}"
+    else:
+        return TEST_SERVER_SELECT
+
+    text = (
+        f"🎯 <b>𝗘𝗻𝘁𝗲𝗿 𝗧𝗮𝗿𝗴𝗲𝘁(𝘀)</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📍 <b>𝗦𝗲𝗹𝗲𝗰𝘁𝗲𝗱:</b> {target_text}\n\n"
+        "Send one or multiple target <code>address:port</code> values.\n"
+        "Examples:\n"
+        "▪️ <code>203.0.113.10:443</code>\n"
+        "▪️ <code>203.0.113.10:443, 198.51.100.20:8443</code>"
+    )
+    await query.edit_message_text(text=text, parse_mode="HTML")
     return TEST_TARGET
 
 
@@ -356,14 +396,16 @@ async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     chat_id = update.effective_chat.id
     mode = context.user_data.get("test_mode", MODE_QUANTUMMUX)
+    server_id = context.user_data.get("test_server_id", "all")
+    stored_mode = f"{mode}:{server_id}"
     job_store = get_job_store(context)
     active_jobs = get_active_jobs(context)
 
-    job = job_store.create_job(chat_id=chat_id, mode=mode, targets=targets)
+    job = job_store.create_job(chat_id=chat_id, mode=stored_mode, targets=targets)
     runtime = ActiveJobContext(
         job_id=job.job_id,
         chat_id=chat_id,
-        mode=mode,
+        mode=stored_mode,
         stop_event=asyncio.Event(),
     )
 

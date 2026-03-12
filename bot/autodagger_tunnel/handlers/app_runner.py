@@ -34,7 +34,20 @@ async def run_target_parallel(
 ) -> None:
     store = get_store(app)
     job_store = get_job_store(app)
-    servers = store.list_servers()
+
+    base_mode = mode.split(":")[0] if ":" in mode else mode
+    server_id_str = mode.split(":")[1] if ":" in mode else "all"
+
+    all_servers = store.list_servers()
+    if server_id_str != "all":
+        try:
+            target_id = int(server_id_str)
+        except ValueError:
+            return
+        servers = [s for s in all_servers if s.id == target_id]
+    else:
+        servers = all_servers
+
     if not servers:
         return
 
@@ -63,7 +76,7 @@ async def run_target_parallel(
 
             await begin_server(server_index, server)
 
-            if mode == MODE_TUN_BIP:
+            if base_mode == MODE_TUN_BIP:
                 result = await tester.apply_tun_bip_config(
                     server,
                     target_addr=target,
@@ -107,7 +120,19 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
         active_jobs.pop(chat_id, None)
         return
 
-    server_total = len(get_store(app).list_servers())
+    base_mode = job.mode.split(":")[0] if ":" in job.mode else job.mode
+    server_id_str = job.mode.split(":")[1] if ":" in job.mode else "all"
+
+    all_servers = get_store(app).list_servers()
+    if server_id_str != "all":
+        try:
+            target_id = int(server_id_str)
+            server_total = len([s for s in all_servers if s.id == target_id])
+        except ValueError:
+            server_total = 0
+    else:
+        server_total = len(all_servers)
+
     job_store.set_running(job_id)
 
     live_msg = CompactQueueLiveMessage(
@@ -117,7 +142,7 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
         target_total=len(job.targets),
         server_total=server_total,
         mode_label=transport_label(job.mode),
-        show_counters=(job.mode == MODE_QUANTUMMUX),
+        show_counters=(base_mode == MODE_QUANTUMMUX),
     )
     await live_msg.start()
 
@@ -176,7 +201,7 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
                     key = f"{batch.target}_{result.get('server_id', 'unknown')}"
                     all_results[key] = result
 
-            summary = summarize_results(all_results, final_job.mode)
+            summary = summarize_results(all_results, base_mode)
             if len(summary) <= 3500:
                 await app.bot.send_message(chat_id=chat_id, text=summary, reply_markup=MENU)
             else:
