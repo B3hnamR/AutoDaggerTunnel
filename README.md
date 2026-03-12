@@ -29,32 +29,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/B3hnamR/AutoDaggerTunnel/mai
 
 This opens the manager menu.
 
-## One-line install for Iran server-side manager (no Telegram)
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/B3hnamR/AutoDaggerTunnel/main/install-iran.sh)
-```
-
-This opens an interactive terminal manager for Iran-side server automation.
-
-Offline usage (no GitHub access on Iran server):
-
-- Upload only `install-iran.sh` to the server
-- Run: `bash install-iran.sh`
-- Script does not run `apt update` or auto-install packages in offline mode
-- If `sshpass` is missing, it tries `SSH_ASKPASS` fallback (via `setsid`); otherwise it runs in key-only mode
-
-The file is self-contained and does not require any second script.
-
-Features:
-
-- Save / edit / delete server SSH entries
-- Set shared config (tunnel port, PSK, protocol, mapping port)
-- Apply server-side `quantummux` config to all saved servers
-- Apply server-side `tun+bip` config to all saved servers
-- Start / stop / restart / status `DaggerConnect-server` on all saved servers
-- Requires core binary on each target server: `/usr/local/bin/DaggerConnect` (upload manually if missing)
-
 ## Manager menu (bash)
 
 - Install / Update
