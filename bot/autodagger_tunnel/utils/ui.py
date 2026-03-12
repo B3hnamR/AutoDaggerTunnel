@@ -42,6 +42,7 @@ CB_SERVER_EDIT = "srv_edit"
 CB_SERVER_DELETE = "srv_delete"
 CB_SERVER_BACK = "srv_back"
 CB_SERVER_PAGE_PREFIX = "srv_page_"
+CB_SERVER_CHECK_PREFIX = "srv_chk_"
 
 CB_MODE_QUANTUMMUX = "mode_quantummux"
 CB_MODE_TUN_BIP = "mode_tun_bip"
@@ -122,13 +123,21 @@ def build_server_carousel_keyboard(
     total: int,
     action: str = "all",
 ) -> InlineKeyboardMarkup:
-    buttons: list[InlineKeyboardButton] = []
-    if action in ("all", "edit"):
-        buttons.append(InlineKeyboardButton(f"{ICON_EDIT} Edit", callback_data=f"edit_server_{server_id}"))
-    if action in ("all", "del"):
-        buttons.append(InlineKeyboardButton(f"{ICON_DELETE} Delete", callback_data=f"delete_server_{server_id}"))
+    keyboard: list[list[InlineKeyboardButton]] = []
+    action_buttons: list[InlineKeyboardButton] = []
 
-    keyboard: list[list[InlineKeyboardButton]] = [buttons] if buttons else []
+    if action in ("all", "edit"):
+        action_buttons.append(InlineKeyboardButton(f"{ICON_EDIT} Edit", callback_data=f"edit_server_{server_id}"))
+    if action in ("all", "del"):
+        action_buttons.append(InlineKeyboardButton(f"{ICON_DELETE} Delete", callback_data=f"delete_server_{server_id}"))
+
+    if action_buttons:
+        keyboard.append(action_buttons)
+
+    if action == "all":
+        keyboard.append(
+            [InlineKeyboardButton("🔄 Test SSH Connection", callback_data=f"{CB_SERVER_CHECK_PREFIX}{server_id}_{current_index}")]
+        )
 
     if total > 1:
         prev_idx = (current_index - 1) % total

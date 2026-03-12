@@ -24,6 +24,7 @@ from ..utils.ui import (
     CB_MODE_QUANTUMMUX,
     CB_MODE_TUN_BIP,
     CB_SERVER_ADD,
+    CB_SERVER_CHECK_PREFIX,
     CB_SERVER_DELETE,
     CB_SERVER_EDIT,
     CB_SERVER_LIST,
@@ -56,6 +57,7 @@ from .servers_handlers import (
     add_start,
     add_start_callback,
     add_username,
+    check_server_callback,
     delete_server_callback,
     execute_delete_callback,
     edit_host,
@@ -92,6 +94,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(list_servers_button, pattern=rf"^{CB_SERVER_LIST}$"), group=1)
     app.add_handler(CallbackQueryHandler(list_servers_for_edit, pattern=rf"^{CB_SERVER_EDIT}$"), group=1)
     app.add_handler(CallbackQueryHandler(list_servers_for_delete, pattern=rf"^{CB_SERVER_DELETE}$"), group=1)
+    app.add_handler(CallbackQueryHandler(check_server_callback, pattern=rf"^{CB_SERVER_CHECK_PREFIX}"), group=1)
     app.add_handler(CallbackQueryHandler(server_page_callback, pattern=rf"^{CB_SERVER_PAGE_PREFIX}"), group=1)
     app.add_handler(CallbackQueryHandler(ignore_callback, pattern=r"^ignore$"), group=1)
     app.add_handler(CallbackQueryHandler(stop_current_job, pattern=rf"^{CB_JOB_STOP_PREFIX}"), group=1)

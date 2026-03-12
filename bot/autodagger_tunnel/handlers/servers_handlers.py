@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from html import escape
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from ..models import ServerRecord
 from ..runtime import get_settings, get_store
+from ..ssh_runner import run_ssh_connectivity_check
 from ..utils.ui import (
     CB_MENU_SERVERS,
+    CB_SERVER_CHECK_PREFIX,
     CB_SERVER_PAGE_PREFIX,
     ICON_ADD,
     ICON_EDIT,
@@ -20,12 +25,12 @@ from ..utils.ui import (
     build_server_carousel_keyboard,
     build_server_management_keyboard,
 )
-from ..utils.validators import parse_host_input, NAME_RE
-from ..ssh_runner import run_ssh_connectivity_check
+from ..utils.validators import NAME_RE, parse_host_input
 
 
 ADD_NAME, ADD_HOST, ADD_USERNAME, ADD_PASSWORD = range(4)
 EDIT_NAME, EDIT_HOST, EDIT_USERNAME, EDIT_PASSWORD = range(4, 8)
+
 
 async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     settings = get_settings(context)
@@ -45,12 +50,14 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     )
     return False
 
+
 async def _render_server_page(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     action: str,
     index: int,
     edit_message: bool = False,
+    status_text: str = "",
 ) -> None:
     store = get_store(context)
     servers = store.list_servers()
@@ -67,30 +74,46 @@ async def _render_server_page(
     index = index % len(servers)
     server = servers[index]
 
-    title = "📋 𝗦𝗮𝘃𝗲𝗱 𝗦𝗲𝗿𝘃𝗲𝗿𝘀"
+    title = "📋 <b>𝗦𝗮𝘃𝗲𝗱 𝗦𝗲𝗿𝘃𝗲𝗿𝘀</b>"
     if action == "edit":
-        title = "✏️ 𝗦𝗲𝗹𝗲𝗰𝘁 𝘁𝗼 𝗘𝗱𝗶𝘁"
+        title = "✏️ <b>𝗦𝗲𝗹𝗲𝗰𝘁 𝘁𝗼 𝗘𝗱𝗶𝘁</b>"
     elif action == "del":
-        title = "🗑 𝗦𝗲𝗹𝗲𝗰𝘁 𝘁𝗼 𝗗𝗲𝗹𝗲𝘁𝗲"
+        title = "🗑 <b>𝗦𝗲𝗹𝗲𝗰𝘁 𝘁𝗼 𝗗𝗲𝗹𝗲𝘁𝗲</b>"
+
+    name_escaped = escape(server.name)
+    host_escaped = escape(f"{server.host}:{server.port}")
+    user_escaped = escape(server.username)
 
     text = (
         f"{title}\n"
         f"━━━━━━━━━━━━━━━━\n"
-        f"🖥 𝗦𝗲𝗿𝘃𝗲𝗿 𝗜𝗗: {server.id}\n"
-        f"🏷 𝗡𝗮𝗺𝗲: {server.name}\n"
-        f"🌐 𝗛𝗼𝘀𝘁: {server.host}:{server.port}\n"
-        f"👤 𝗨𝘀𝗲𝗿: {server.username}"
+        f"🖥 <b>𝗦𝗲𝗿𝘃𝗲𝗿 𝗜𝗗:</b> {server.id}\n"
+        f"🏷 <b>𝗡𝗮𝗺𝗲:</b> <code>{name_escaped}</code>\n"
+        f"🌐 <b>𝗛𝗼𝘀𝘁:</b> <code>{host_escaped}</code>\n"
+        f"👤 <b>𝗨𝘀𝗲𝗿:</b> <code>{user_escaped}</code>"
     )
+
+    if status_text:
+        text += f"\n━━━━━━━━━━━━━━━━\n{status_text}"
 
     reply_markup = build_server_carousel_keyboard(server.id, index, len(servers), action)
 
     if edit_message and update.callback_query:
         try:
-            await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML,
+            )
         except Exception:
             pass
     else:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=text, reply_markup=reply_markup)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def list_servers_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -124,13 +147,75 @@ async def server_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     data = query.data.replace(CB_SERVER_PAGE_PREFIX, "")
-    action, index_str = data.split("_", 1)
-    await _render_server_page(update, context, action=action, index=int(index_str), edit_message=True)
+    try:
+        action, index_str = data.split("_", 1)
+        index = int(index_str)
+    except Exception:
+        await query.answer("Invalid page data", show_alert=True)
+        return
+
+    await _render_server_page(update, context, action=action, index=index, edit_message=True)
 
 
 async def ignore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
+
+
+async def check_server_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    if not await check_access(update, context):
+        return
+
+    data = query.data.replace(CB_SERVER_CHECK_PREFIX, "")
+    try:
+        server_id_str, index_str = data.split("_", 1)
+        server_id = int(server_id_str)
+        index = int(index_str)
+    except Exception:
+        await query.answer("Invalid check request", show_alert=True)
+        return
+
+    server = get_store(context).get_server(server_id)
+    if server is None:
+        await query.answer("❌ Server not found!", show_alert=True)
+        return
+
+    await query.answer("Testing SSH... Please wait ⏳")
+    await _render_server_page(
+        update,
+        context,
+        action="all",
+        index=index,
+        edit_message=True,
+        status_text="🔄 <i>Testing SSH connection, please wait...</i>",
+    )
+
+    settings = get_settings(context)
+    check_ok, check_detail = await run_ssh_connectivity_check(
+        host=server.host,
+        port=server.port,
+        username=server.username,
+        password=server.password,
+        connect_timeout=settings.ssh_connect_timeout,
+        max_retries=1,
+    )
+
+    if check_ok:
+        final_status = "🚦 <b>𝗦𝘁𝗮𝘁𝘂𝘀:</b> ✅ Online (Connection Successful)"
+    else:
+        final_status = f"🚦 <b>𝗦𝘁𝗮𝘁𝘂𝘀:</b> ❌ Offline\n⚠️ <b>Reason:</b> <code>{escape(check_detail)}</code>"
+
+    await _render_server_page(
+        update,
+        context,
+        action="all",
+        index=index,
+        edit_message=True,
+        status_text=final_status,
+    )
 
 
 async def server_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -153,12 +238,12 @@ async def add_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return await add_start(update, context)
 
 
-# --- ADD SERVER ---
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await check_access(update, context):
         return ConversationHandler.END
     await update.effective_message.reply_text(f"{ICON_ADD} Send server name (letters, numbers, -, _)")
     return ADD_NAME
+
 
 async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.effective_message.text.strip()
@@ -169,6 +254,7 @@ async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["add_name"] = text
     await update.effective_message.reply_text("Send host or host:port (example: 1.2.3.4 or 1.2.3.4:22)")
     return ADD_HOST
+
 
 async def add_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     parsed = parse_host_input(update.effective_message.text)
@@ -181,12 +267,14 @@ async def add_host(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(f"{ICON_USER} Send SSH username (default: root). Send '-' to use root.")
     return ADD_USERNAME
 
+
 async def add_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.effective_message.text.strip()
     username = "root" if raw in {"", "-"} or raw.lower() == "root" else raw
     context.user_data["add_username"] = username
     await update.effective_message.reply_text(f"{ICON_LOCK} Send SSH password")
     return ADD_PASSWORD
+
 
 async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     password = update.effective_message.text
@@ -202,8 +290,11 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     try:
         server_id = store.add_server(name=name, host=host, port=port, username=username, password=password)
-    except Exception as exc: 
-        await update.effective_message.reply_text(f"Failed to save server: {exc}", reply_markup=build_server_management_keyboard())
+    except Exception as exc:
+        await update.effective_message.reply_text(
+            f"Failed to save server: {exc}",
+            reply_markup=build_server_management_keyboard(),
+        )
         return ConversationHandler.END
 
     await update.effective_message.reply_text(
@@ -237,11 +328,10 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
-# --- EDIT SERVER (Via Inline Button Callback) ---
 async def edit_server_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    
+
     if not await check_access(update, context):
         return ConversationHandler.END
 
@@ -259,9 +349,10 @@ async def edit_server_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(f"{ICON_EDIT} Editing [{server.name}] (Leave empty/send '-' to skip each step)")
     await context.bot.send_message(
         chat_id=query.message.chat_id,
-        text=f"Current name: {server.name}\nSend new name or '-' to keep"
+        text=f"Current name: {server.name}\nSend new name or '-' to keep",
     )
     return EDIT_NAME
+
 
 async def edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     server: ServerRecord = context.user_data["edit_server"]
@@ -342,18 +433,24 @@ async def edit_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             username=context.user_data["edit_username"],
             password=password,
         )
-    except Exception as exc: 
-        await update.effective_message.reply_text(f"Edit failed: {exc}", reply_markup=build_server_management_keyboard())
+    except Exception as exc:
+        await update.effective_message.reply_text(
+            f"Edit failed: {exc}",
+            reply_markup=build_server_management_keyboard(),
+        )
         return ConversationHandler.END
 
     if not ok:
-        await update.effective_message.reply_text(f"{ICON_WARN} Server no longer exists.", reply_markup=build_server_management_keyboard())
+        await update.effective_message.reply_text(
+            f"{ICON_WARN} Server no longer exists.",
+            reply_markup=build_server_management_keyboard(),
+        )
         return ConversationHandler.END
 
     await update.effective_message.reply_text(f"{ICON_OK} Server updated.", reply_markup=build_server_management_keyboard())
     return ConversationHandler.END
 
-# --- DELETE SERVER (Via Inline Button Callback) ---
+
 async def delete_server_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
