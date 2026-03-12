@@ -314,10 +314,6 @@ class JobStore:
             return default
 
     def _row_to_job(self, row: sqlite3.Row) -> JobRecord:
-        targets = self._safe_str_list(self._load_json(row["targets_json"], default=[]))
-        pending_targets = self._safe_str_list(self._load_json(row["pending_targets_json"], default=[]))
-        batches_raw = self._load_json(row["completed_batches_json"], default=[])
-        batches: list[JobBatchRecord] = []
         completed_dicts = self._load_json(row["completed_batches_json"], default=[])
         completed: list[JobBatchRecord] = []
         if isinstance(completed_dicts, list):

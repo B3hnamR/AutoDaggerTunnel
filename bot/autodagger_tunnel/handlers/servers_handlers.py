@@ -8,7 +8,7 @@ from ..models import ServerRecord
 from ..settings import Settings
 from ..utils.ui import (
     ICON_ADD, ICON_WARN, ICON_USER, ICON_LOCK, ICON_OK, ICON_SEARCH, ICON_FAIL,
-    ICON_EDIT, ICON_DELETE, ICON_LIST, MENU, build_server_list_keyboard
+    ICON_EDIT, ICON_LIST, MENU, build_server_list_keyboard
 )
 from ..utils.validators import parse_host_input, NAME_RE
 from ..ssh_runner import run_ssh_connectivity_check

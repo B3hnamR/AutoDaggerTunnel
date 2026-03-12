@@ -1,34 +1,61 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
+import re
 import time
+from dataclasses import dataclass
+from typing import Optional
+
 from telegram import Update
-from telegram.ext import ContextTypes, ConversationHandler
 from telegram.error import BadRequest
+from telegram.ext import ContextTypes, ConversationHandler
 
-from ..db import JobStore, ServerStore
+from ..db import JobStore
 from ..models import JobRecord, ServerRecord
-from ..ssh_runner import DaggerSshTester, ServerTestResult, TestStatus, summarize_results
-from ..settings import Settings
+from ..ssh_runner import ServerTestResult, TestStatus
 from ..utils.ui import (
-    ICON_OK, ICON_WARN, ICON_FAIL, ICON_INFO, ICON_WAIT, ICON_ROCKET,
-    ICON_ADD, ICON_TARGET, ICON_ID, ICON_PLAY, ICON_STOP, ICON_RADAR,
-    ICON_NOTE, ICON_PC, ICON_CHART, MENU, transport_label, BTN_STOP
+    BTN_STOP,
+    ICON_CHART,
+    ICON_ID,
+    ICON_INFO,
+    ICON_LIST,
+    ICON_NOTE,
+    ICON_PC,
+    ICON_PLAY,
+    ICON_RADAR,
+    ICON_ROCKET,
+    ICON_STOP,
+    ICON_TARGET,
+    ICON_WAIT,
+    ICON_WARN,
+    MENU,
+    transport_label,
 )
-from ..utils.validators import parse_transport_choice, parse_targets_input, compact_error
-from .servers_handlers import check_access, get_store, get_settings
-
+from ..utils.validators import parse_targets_input, parse_transport_choice
+from .servers_handlers import check_access, get_store
 
 TEST_TRANSPORT, TEST_TARGET = range(10, 12)
 MODE_QUANTUMMUX = "quantummux"
 MODE_TUN_BIP = "tun_bip"
+ATTEMPT_RE = re.compile(r"attempt #(\d+)", re.IGNORECASE)
+
+
+@dataclass
+class ActiveJobContext:
+    job_id: str
+    chat_id: int
+    mode: str
+    stop_event: asyncio.Event
+    task: Optional[asyncio.Task] = None
 
 
 def get_job_store(context: ContextTypes.DEFAULT_TYPE) -> JobStore:
     return context.application.bot_data["job_store"]
 
-def get_active_jobs(context: ContextTypes.DEFAULT_TYPE) -> dict[int, "ActiveJobContext"]:
+
+def get_active_jobs(context: ContextTypes.DEFAULT_TYPE) -> dict[int, ActiveJobContext]:
     return context.application.bot_data["active_jobs"]
+
 
 def serialize_result(result: ServerTestResult) -> dict:
     return {
@@ -49,12 +76,12 @@ def serialize_result(result: ServerTestResult) -> dict:
         "log_tail": list(result.log_tail),
     }
 
+
 def generate_progress_bar(current: int, total: int, length: int = 10) -> str:
-    """Generates a text-based progress bar."""
     if total == 0:
-        return f"[{'░' * length}] 0%"
+        return f"[{'-' * length}] 0%"
     filled = int(round(length * current / float(total)))
-    bar = "█" * filled + "░" * (length - filled)
+    bar = "#" * filled + "-" * (length - filled)
     percent = int(round(100.0 * current / float(total)))
     return f"[{bar}] {percent}%"
 
@@ -78,7 +105,8 @@ class CompactQueueLiveMessage:
         self.server_total = server_total
         self.mode_label = mode_label
         self.show_counters = show_counters
-        self.message_id = None
+
+        self.message_id: Optional[int] = None
         self.started_at = time.monotonic()
         self.last_flush = 0.0
 
@@ -200,8 +228,7 @@ class CompactQueueLiveMessage:
         now = time.monotonic()
         if not force and now - self.last_flush < 1.0:
             return
-        import logging
-        logger = logging.getLogger("autodagger_tunnel.ui")
+
         try:
             await self.app.bot.edit_message_text(
                 chat_id=self.chat_id,
@@ -211,7 +238,9 @@ class CompactQueueLiveMessage:
             self.last_flush = now
         except BadRequest as exc:
             if "Message is not modified" not in str(exc):
-                logger.warning("Live log update failed: %s", exc)
+                import logging
+
+                logging.getLogger("autodagger_tunnel.ui").warning("Live log update failed: %s", exc)
 
     def _render(self) -> str:
         elapsed = int(time.monotonic() - self.started_at)
@@ -232,15 +261,16 @@ class CompactQueueLiveMessage:
                 f"{ICON_CHART} Counters: c={self.connected_count} d={self.disconnected_count} "
                 f"r={self.reconnect_count} s0={self.streams_zero_count} oom={self.oom_count}"
             )
-        lines.extend([
-            f"{ICON_CHART} Tally: ok={self.target_success} fail={self.target_failed} review={self.target_review} "
-            f"ssh={self.target_ssh} setup={self.target_setup}",
-            f"{ICON_WAIT} Elapsed: {elapsed}s",
-        ])
+        lines.extend(
+            [
+                f"{ICON_CHART} Tally: ok={self.target_success} fail={self.target_failed} review={self.target_review} "
+                f"ssh={self.target_ssh} setup={self.target_setup}",
+                f"{ICON_WAIT} Elapsed: {elapsed}s",
+            ]
+        )
         return "\n".join(lines)
 
     def _extract_event(self, line: str) -> tuple[str, str] | None:
-        import re
         lower = line.lower()
         if "oom-kill" in lower or "failed with result 'oom-kill'" in lower:
             return "oom", "OOM_KILL detected"
@@ -249,14 +279,15 @@ class CompactQueueLiveMessage:
         if "] disconnected " in lower:
             return "disconnected", "DISCONNECTED detected"
         if "reconnect in" in lower:
-            attempt = re.search(r"attempt #(\d+)", line, re.IGNORECASE)
-            return ("reconnect", f"RECONNECT detected (#{attempt.group(1)})") if attempt else ("reconnect", "RECONNECT detected")
+            attempt = ATTEMPT_RE.search(line)
+            if attempt:
+                return "reconnect", f"RECONNECT detected (#{attempt.group(1)})"
+            return "reconnect", "RECONNECT detected"
         if "streams=0" in lower:
             return "streams_zero", "STREAMS_ZERO detected"
         return None
 
 
-# --- START TEST FLOW ---
 async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await check_access(update, context):
         return ConversationHandler.END
@@ -271,7 +302,10 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     if not get_store(context).list_servers():
-        await update.effective_message.reply_text(f"{ICON_LIST} No servers saved yet. Add server first.", reply_markup=MENU)
+        await update.effective_message.reply_text(
+            f"{ICON_LIST} No servers saved yet. Add server first.",
+            reply_markup=MENU,
+        )
         return ConversationHandler.END
 
     await update.effective_message.reply_text(
@@ -280,6 +314,7 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "2) tun + bip (config only, manual test)"
     )
     return TEST_TRANSPORT
+
 
 async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     mode = parse_transport_choice(update.effective_message.text)
@@ -297,6 +332,7 @@ async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_T
         "- 203.0.113.10:443, 198.51.100.20:8443"
     )
     return TEST_TARGET
+
 
 async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw_input = update.effective_message.text.strip()
@@ -318,17 +354,6 @@ async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE
     job_store = get_job_store(context)
     active_jobs = get_active_jobs(context)
 
-    from dataclasses import dataclass
-    from typing import Optional
-
-    @dataclass
-    class ActiveJobContext:
-        job_id: str
-        chat_id: int
-        mode: str
-        stop_event: asyncio.Event
-        task: Optional[asyncio.Task] = None
-
     job = job_store.create_job(chat_id=chat_id, mode=mode, targets=targets)
     runtime = ActiveJobContext(
         job_id=job.job_id,
@@ -336,9 +361,9 @@ async def test_receive_target(update: Update, context: ContextTypes.DEFAULT_TYPE
         mode=mode,
         stop_event=asyncio.Event(),
     )
-    
-    # Needs late import due to circular dep if moved incorrectly
-    from .app_runner import run_job_queue 
+
+    from .app_runner import run_job_queue
+
     task = context.application.create_task(run_job_queue(context.application, chat_id, job.job_id))
     runtime.task = task
     active_jobs[chat_id] = runtime
@@ -394,6 +419,7 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     job_store = get_job_store(context)
     requested_id = context.args[0].strip() if context.args else ""
+    job: Optional[JobRecord]
 
     if requested_id:
         job = job_store.get_job(requested_id)
@@ -426,24 +452,15 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    from dataclasses import dataclass
-    from typing import Optional
-
-    @dataclass
-    class ActiveJobContext:
-        job_id: str
-        chat_id: int
-        mode: str
-        stop_event: asyncio.Event
-        task: Optional[asyncio.Task] = None
-
     runtime = ActiveJobContext(
         job_id=job.job_id,
         chat_id=chat_id,
         mode=job.mode,
         stop_event=asyncio.Event(),
     )
-    from .app_runner import run_job_queue 
+
+    from .app_runner import run_job_queue
+
     task = context.application.create_task(run_job_queue(context.application, chat_id, job.job_id))
     runtime.task = task
     active_jobs[chat_id] = runtime

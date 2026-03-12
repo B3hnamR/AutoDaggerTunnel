@@ -1,5 +1,6 @@
 import logging
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -27,11 +28,11 @@ from .handlers.jobs_handlers import (
     stop_current_job, resume_command
 )
 from .utils.ui import (
-    BTN_ADD, BTN_LIST, BTN_TEST, BTN_STOP,
+    BTN_ADD, BTN_DELETE, BTN_EDIT, BTN_LIST, BTN_TEST, BTN_STOP,
     STATE_TEXT_FILTER, MENU_BUTTON_FILTER
 )
 
-def build_app(settings: Settings) -> ApplicationBuilder:
+def build_app(settings: Settings) -> Application:
     app = ApplicationBuilder().token(settings.bot_token).build()
 
     fernet = load_or_create_fernet(settings.key_file)
@@ -51,6 +52,8 @@ def build_app(settings: Settings) -> ApplicationBuilder:
 
     # Single-shot buttons
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_LIST}$"), list_servers_button))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_EDIT}$"), list_servers_button))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_DELETE}$"), list_servers_button))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_STOP}$"), stop_current_job))
 
     # Inline Keyboards
@@ -115,6 +118,10 @@ def main() -> None:
     # Initialize Databases
     app.bot_data["store"].init()
     app.bot_data["job_store"].init()
+    app.bot_data["job_store"].mark_running_as_interrupted()
     
     # Run bot
     app.run_polling()
+
+if __name__ == "__main__":
+    main()

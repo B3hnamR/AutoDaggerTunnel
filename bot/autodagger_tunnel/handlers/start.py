@@ -3,8 +3,8 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-from ..utils.ui import ICON_OK, ICON_ID, ICON_CANCEL, ICON_SWITCH, MENU, BTN_ADD, BTN_EDIT, BTN_DELETE, BTN_TEST, BTN_LIST
-from .servers_handlers import check_access, get_settings, list_servers_button
+from ..utils.ui import ICON_OK, ICON_ID, ICON_CANCEL, MENU
+from .servers_handlers import check_access, get_settings
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await check_access(update, context):

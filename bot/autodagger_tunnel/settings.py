@@ -41,6 +41,7 @@ class Settings:
     access_mode: str
     allowed_user_ids: Set[int]
     db_path: Path
+    job_db_path: Path
     key_file: Path
     default_psk: str
     test_window_seconds: int
@@ -58,6 +59,7 @@ def load_settings() -> Settings:
     data_dir = Path(os.getenv("DATA_DIR", str(app_base / "data"))).resolve()
 
     db_path = Path(os.getenv("DB_PATH", str(data_dir / "servers.db"))).resolve()
+    job_db_path = Path(os.getenv("JOB_DB_PATH", str(data_dir / "jobs.db"))).resolve()
     key_file = Path(os.getenv("KEY_FILE", str(data_dir / "secret.key"))).resolve()
 
     bot_token = os.getenv("BOT_TOKEN", "").strip()
@@ -78,6 +80,7 @@ def load_settings() -> Settings:
         access_mode=access_mode,
         allowed_user_ids=allowed_user_ids,
         db_path=db_path,
+        job_db_path=job_db_path,
         key_file=key_file,
         default_psk=default_psk,
         test_window_seconds=_parse_int("TEST_WINDOW_SECONDS", 75),
