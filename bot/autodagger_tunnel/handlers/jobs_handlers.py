@@ -18,12 +18,8 @@ from ..utils.ui import (
     CB_MODE_BACK,
     CB_MODE_QUANTUMMUX,
     CB_MODE_TUN_BIP,
-    ICON_CHART,
-    ICON_ID,
     ICON_INFO,
     ICON_LIST,
-    ICON_NOTE,
-    ICON_PC,
     ICON_PLAY,
     ICON_RADAR,
     ICON_STOP,
@@ -64,11 +60,11 @@ def serialize_result(result: ServerTestResult) -> dict:
     }
 
 
-def generate_progress_bar(current: int, total: int, length: int = 10) -> str:
+def generate_progress_bar(current: int, total: int, length: int = 15) -> str:
     if total == 0:
-        return f"[{'-' * length}] 0%"
+        return f"[{'░' * length}] 0%"
     filled = int(round(length * current / float(total)))
-    bar = "#" * filled + "-" * (length - filled)
+    bar = "█" * filled + "░" * (length - filled)
     percent = int(round(100.0 * current / float(total)))
     return f"[{bar}] {percent}%"
 
@@ -239,26 +235,26 @@ class CompactQueueLiveMessage:
         progress_bar = generate_progress_bar(self.target_done, self.server_total)
 
         lines = [
-            f"{ICON_RADAR} Live Tunnel Status",
-            f"{ICON_ID} Job ID: {self.job_id}",
-            f"{ICON_NOTE} Mode: {self.mode_label}",
-            f"{ICON_TARGET} Target: {self.target_index}/{self.target_total} -> {self.current_target}",
-            f"{ICON_PC} Server [{self.server_index}/{self.server_total}]: {self.current_server}",
-            f"Progress: {progress_bar}",
-            f"{ICON_INFO} State: {self.current_state}",
-            f"{ICON_INFO} Signal: {self.latest_signal}",
+            f"{ICON_RADAR} 𝗟𝗜𝗩𝗘 𝗧𝗨𝗡𝗡𝗘𝗟 𝗦𝗧𝗔𝗧𝗨𝗦",
+            "━━━━━━━━━━━━━━━━━━━━━━",
+            f"🆔 𝗝𝗼𝗯 𝗜𝗗: {self.job_id}",
+            f"⚙️ 𝗠𝗼𝗱𝗲: {self.mode_label}",
+            f"🎯 𝗧𝗮𝗿𝗴𝗲𝘁 [{self.target_index}/{self.target_total}]: {self.current_target}",
+            f"🖥 𝗦𝗲𝗿𝘃𝗲𝗿 [{self.server_index}/{self.server_total}]: {self.current_server}",
+            "",
+            f"⏱ 𝗘𝗹𝗮𝗽𝘀𝗲𝗱: {elapsed}s",
+            f"🚀 𝗣𝗿𝗼𝗴𝗿𝗲𝘀𝘀: {progress_bar}",
+            "",
+            f"ℹ️ 𝗦𝘁𝗮𝘁𝗲: {self.current_state}",
+            f"🔔 𝗦𝗶𝗴𝗻𝗮𝗹: {self.latest_signal}",
+            "━━━━━━━━━━━━━━━━━━━━━━",
         ]
         if self.show_counters:
             lines.append(
-                f"{ICON_CHART} Signals: c={self.connected_count} d={self.disconnected_count} "
-                f"r={self.reconnect_count} s0={self.streams_zero_count} oom={self.oom_count}"
+                f"📈 𝗦𝗶𝗴𝗻𝗮𝗹𝘀: 🟢 {self.connected_count} | 🔴 {self.disconnected_count} | 🔄 {self.reconnect_count} | ⚠️ {self.streams_zero_count} | 💥 {self.oom_count}"
             )
-        lines.extend(
-            [
-                f"{ICON_CHART} Tally: ok={self.target_success} fail={self.target_failed} review={self.target_review} "
-                f"ssh={self.target_ssh} setup={self.target_setup}",
-                f"{ICON_WAIT} Elapsed: {elapsed}s",
-            ]
+        lines.append(
+            f"📊 𝗧𝗮𝗹𝗹𝘆: ✅ {self.target_success} | ❌ {self.target_failed} | 🔍 {self.target_review} | 🚫 {self.target_ssh} | 🛠 {self.target_setup}"
         )
         return "\n".join(lines)
 

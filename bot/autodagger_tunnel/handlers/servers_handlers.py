@@ -76,14 +76,20 @@ async def _show_servers_with_actions(
     if not servers:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"{ICON_LIST} No servers saved yet.",
+            text=f"{ICON_WARN} No servers saved yet. Please add one first.",
             reply_markup=build_server_management_keyboard(),
         )
         return
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text=title)
     for server in servers:
-        text = f"ID: {server.id} | Name: {server.name}\nHost: {server.host}:{server.port}\nUser: {server.username}"
+        text = (
+            f"🖥 𝗦𝗲𝗿𝘃𝗲𝗿 𝗜𝗗: {server.id}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"🏷 𝗡𝗮𝗺𝗲: {server.name}\n"
+            f"🌐 𝗛𝗼𝘀𝘁: {server.host}:{server.port}\n"
+            f"👤 𝗨𝘀𝗲𝗿: {server.username}"
+        )
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=text,

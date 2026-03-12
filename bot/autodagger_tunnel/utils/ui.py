@@ -4,32 +4,32 @@ import re
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import filters
 
-# --- Icons ---
-ICON_OK = "\u2705"
-ICON_WARN = "\u26A0\ufe0f"
-ICON_FAIL = "\u274C"
-ICON_INFO = "\u2139\ufe0f"
-ICON_WAIT = "\u23F3"
-ICON_ROCKET = "\U0001F680"
-ICON_ADD = "\u2795"
-ICON_LIST = "\U0001F4CB"
-ICON_EDIT = "\u270F\ufe0f"
-ICON_DELETE = "\U0001F5D1\ufe0f"
-ICON_TARGET = "\U0001F3AF"
-ICON_RADAR = "\U0001F6F0\ufe0f"
-ICON_CHART = "\U0001F4CA"
-ICON_SEARCH = "\U0001F50E"
-ICON_LOCK = "\U0001F510"
-ICON_USER = "\U0001F464"
-ICON_PC = "\U0001F5A5\ufe0f"
-ICON_NOTE = "\U0001F9FE"
-ICON_SWITCH = "\u21A9\ufe0f"
-ICON_CANCEL = "\U0001F6D1"
-ICON_ID = "\U0001F194"
-ICON_STOP = "\U0001F6D1"
-ICON_PLAY = "\u25B6\ufe0f"
-ICON_MENU = "\U0001F5C2\ufe0f"
-ICON_BACK = "\u2B05\ufe0f"
+# --- Icons (Modernized) ---
+ICON_OK = "✅"
+ICON_WARN = "⚠️"
+ICON_FAIL = "❌"
+ICON_INFO = "ℹ️"
+ICON_WAIT = "⏳"
+ICON_ROCKET = "🚀"
+ICON_ADD = "➕"
+ICON_LIST = "📋"
+ICON_EDIT = "✏️"
+ICON_DELETE = "🗑"
+ICON_TARGET = "🎯"
+ICON_RADAR = "📡"
+ICON_CHART = "📊"
+ICON_SEARCH = "🔍"
+ICON_LOCK = "🔐"
+ICON_USER = "👤"
+ICON_PC = "🖥"
+ICON_NOTE = "📝"
+ICON_SWITCH = "🔄"
+ICON_CANCEL = "🚫"
+ICON_ID = "🆔"
+ICON_STOP = "🛑"
+ICON_PLAY = "▶️"
+ICON_MENU = "🎛"
+ICON_BACK = "🔙"
 
 # --- Callback Data ---
 CB_MENU_MAIN = "menu_main"
@@ -48,7 +48,7 @@ CB_MODE_BACK = "mode_back"
 
 CB_JOB_STOP_PREFIX = "job_stop:"
 
-# --- Legacy message buttons (kept for backward compatibility) ---
+# --- Legacy message buttons ---
 BTN_TEST = f"{ICON_ROCKET} Start Tunnel Test"
 BTN_STOP = f"{ICON_STOP} Stop Current Job"
 BTN_ADD = f"{ICON_ADD} Add Server"
@@ -78,7 +78,7 @@ STATE_TEXT_FILTER = filters.TEXT & ~filters.COMMAND
 def build_main_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(f"{ICON_ROCKET} Start Tunnel Test", callback_data=CB_MENU_TEST)],
-        [InlineKeyboardButton(f"{ICON_MENU} Server Management", callback_data=CB_MENU_SERVERS)],
+        [InlineKeyboardButton(f"{ICON_PC} Server Management", callback_data=CB_MENU_SERVERS)],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -86,29 +86,29 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
 def build_server_management_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton(f"{ICON_ADD} Add", callback_data=CB_SERVER_ADD),
-            InlineKeyboardButton(f"{ICON_LIST} List", callback_data=CB_SERVER_LIST),
+            InlineKeyboardButton(f"{ICON_ADD} Add Server", callback_data=CB_SERVER_ADD),
+            InlineKeyboardButton(f"{ICON_LIST} Server List", callback_data=CB_SERVER_LIST),
         ],
         [
             InlineKeyboardButton(f"{ICON_EDIT} Edit", callback_data=CB_SERVER_EDIT),
             InlineKeyboardButton(f"{ICON_DELETE} Delete", callback_data=CB_SERVER_DELETE),
         ],
-        [InlineKeyboardButton(f"{ICON_BACK} Back", callback_data=CB_MENU_MAIN)],
+        [InlineKeyboardButton(f"{ICON_BACK} Back to Main Menu", callback_data=CB_MENU_MAIN)],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def build_transport_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("1) quantummux (auto log check)", callback_data=CB_MODE_QUANTUMMUX)],
-        [InlineKeyboardButton("2) tun + bip (config only)", callback_data=CB_MODE_TUN_BIP)],
+        [InlineKeyboardButton("⚡️ 1) QuantumMux (Auto Log Check)", callback_data=CB_MODE_QUANTUMMUX)],
+        [InlineKeyboardButton("🛡 2) TUN + BIP (Config Only)", callback_data=CB_MODE_TUN_BIP)],
         [InlineKeyboardButton(f"{ICON_BACK} Back", callback_data=CB_MODE_BACK)],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def build_job_stop_keyboard(job_id: str) -> InlineKeyboardMarkup:
-    keyboard = [[InlineKeyboardButton(f"{ICON_STOP} Stop Current Job", callback_data=f"{CB_JOB_STOP_PREFIX}{job_id}")]]
+    keyboard = [[InlineKeyboardButton(f"{ICON_STOP} Abort Current Job", callback_data=f"{CB_JOB_STOP_PREFIX}{job_id}")]]
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -128,11 +128,11 @@ def build_server_list_keyboard(
         buttons.append(InlineKeyboardButton(f"{ICON_DELETE} Delete", callback_data=f"delete_server_{server_id}"))
 
     keyboard = [buttons] if buttons else []
-    keyboard.append([InlineKeyboardButton(f"{ICON_BACK} Back", callback_data=CB_MENU_SERVERS)])
+    keyboard.append([InlineKeyboardButton(f"{ICON_BACK} Back to Servers", callback_data=CB_MENU_SERVERS)])
     return InlineKeyboardMarkup(keyboard)
 
 
 def transport_label(mode: str) -> str:
     if mode == "tun_bip":
-        return "tun + bip"
-    return "quantummux"
+        return "TUN + BIP"
+    return "QuantumMux"
