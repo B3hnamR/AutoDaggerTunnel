@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from ..db import ServerStore
 from ..models import ServerRecord
-from ..settings import Settings
+from ..runtime import get_settings, get_store
 from ..utils.ui import (
     ICON_ADD, ICON_WARN, ICON_USER, ICON_LOCK, ICON_OK, ICON_SEARCH, ICON_FAIL,
     ICON_EDIT, ICON_LIST, MENU, build_server_list_keyboard
@@ -14,15 +14,8 @@ from ..utils.validators import parse_host_input, NAME_RE
 from ..ssh_runner import run_ssh_connectivity_check
 
 
-# State Constants
 ADD_NAME, ADD_HOST, ADD_USERNAME, ADD_PASSWORD = range(4)
 EDIT_NAME, EDIT_HOST, EDIT_USERNAME, EDIT_PASSWORD = range(4, 8)
-
-def get_store(context: ContextTypes.DEFAULT_TYPE) -> ServerStore:
-    return context.application.bot_data["store"]
-
-def get_settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
-    return context.application.bot_data["settings"]
 
 async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     settings = get_settings(context)
@@ -137,6 +130,10 @@ async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         username=username,
         password=password,
         connect_timeout=settings.ssh_connect_timeout,
+        max_retries=settings.ssh_max_retries,
+        retry_backoff_seconds=settings.ssh_retry_backoff_seconds,
+        keepalive_interval=settings.ssh_keepalive_interval,
+        keepalive_count_max=settings.ssh_keepalive_count_max,
     )
 
     if check_ok:

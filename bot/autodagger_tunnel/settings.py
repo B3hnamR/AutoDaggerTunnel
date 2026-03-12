@@ -47,6 +47,8 @@ class Settings:
     test_window_seconds: int
     ssh_connect_timeout: int
     ssh_command_timeout: int
+    ssh_keepalive_interval: int
+    ssh_keepalive_count_max: int
     dagger_binary_url: str
     max_parallel_servers: int
     ssh_max_retries: int
@@ -86,6 +88,8 @@ def load_settings() -> Settings:
         test_window_seconds=_parse_int("TEST_WINDOW_SECONDS", 75),
         ssh_connect_timeout=_parse_int("SSH_CONNECT_TIMEOUT", 12),
         ssh_command_timeout=_parse_int("SSH_COMMAND_TIMEOUT", 45),
+        ssh_keepalive_interval=_parse_int("SSH_KEEPALIVE_INTERVAL", 15),
+        ssh_keepalive_count_max=_parse_int("SSH_KEEPALIVE_COUNT_MAX", 3),
         max_parallel_servers=_parse_int("MAX_PARALLEL_SERVERS", 3),
         ssh_max_retries=_parse_int("SSH_MAX_RETRIES", 3),
         ssh_retry_backoff_seconds=_parse_float("SSH_RETRY_BACKOFF_SECONDS", 1.5),

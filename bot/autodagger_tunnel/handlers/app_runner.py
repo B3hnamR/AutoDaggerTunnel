@@ -1,21 +1,23 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from collections.abc import Awaitable, Callable
 
 from telegram.ext import Application
 
-from ..ssh_runner import DaggerSshTester, summarize_results
-from .jobs_handlers import (
-    CompactQueueLiveMessage,
-    MODE_QUANTUMMUX,
-    MODE_TUN_BIP,
-    serialize_result,
-)
+from ..runtime import get_active_jobs, get_job_store, get_settings, get_store
+from ..settings import Settings
+from ..ssh_runner import DaggerSshTester, ServerTestResult, summarize_results
+from ..models import ServerRecord
+from .jobs_handlers import CompactQueueLiveMessage, MODE_QUANTUMMUX, MODE_TUN_BIP, serialize_result
 
 logger = logging.getLogger(__name__)
 TEST_TIMEOUT_SECONDS = 3600
+
+LiveBeginServer = Callable[[int, ServerRecord], Awaitable[None]]
+LiveLogLine = Callable[[str], Awaitable[None]]
+LiveFinishServer = Callable[[ServerTestResult], Awaitable[None]]
 
 
 async def run_target_parallel(
@@ -27,11 +29,10 @@ async def run_target_parallel(
     mode: str,
     live_msg: CompactQueueLiveMessage,
     stop_event: asyncio.Event,
-    settings: Any,
+    settings: Settings,
 ) -> None:
-    store = app.bot_data["store"]
-    job_store = app.bot_data["job_store"]
-
+    store = get_store(app)
+    job_store = get_job_store(app)
     servers = store.list_servers()
     if not servers:
         return
@@ -40,20 +41,33 @@ async def run_target_parallel(
 
     tester = DaggerSshTester(settings)
     semaphore = asyncio.Semaphore(max(1, settings.max_parallel_servers))
+    live_lock = asyncio.Lock()
+
+    async def begin_server(index: int, server: ServerRecord) -> None:
+        async with live_lock:
+            await live_msg.begin_server(index, server)
+
+    async def on_log_line(line: str) -> None:
+        async with live_lock:
+            await live_msg.on_log_line(line)
+
+    async def finish_server(result: ServerTestResult) -> None:
+        async with live_lock:
+            await live_msg.finish_server(result)
 
     async def run_single_server(server, server_index: int) -> None:
         async with semaphore:
             if stop_event.is_set():
                 return
 
-            await live_msg.begin_server(server_index, server)
+            await begin_server(server_index, server)
 
             if mode == MODE_TUN_BIP:
                 result = await tester.apply_tun_bip_config(
                     server,
                     target_addr=target,
                     psk=settings.default_psk,
-                    on_log_line=live_msg.on_log_line,
+                    on_log_line=on_log_line,
                     stop_event=stop_event,
                 )
             else:
@@ -61,17 +75,17 @@ async def run_target_parallel(
                     server,
                     target_addr=target,
                     psk=settings.default_psk,
-                    on_log_line=live_msg.on_log_line,
+                    on_log_line=on_log_line,
                     stop_event=stop_event,
                 )
 
             job_store.save_server_result(job_id, target, serialize_result(result))
-            await live_msg.finish_server(result)
+            await finish_server(result)
 
     tasks = [asyncio.create_task(run_single_server(server, i)) for i, server in enumerate(servers, start=1)]
     if tasks:
-        done = await asyncio.gather(*tasks, return_exceptions=True)
-        for item in done:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for item in results:
             if isinstance(item, Exception) and not isinstance(item, asyncio.CancelledError):
                 logger.exception("Server task failed in job %s target %s: %s", job_id, target, item)
 
@@ -79,20 +93,20 @@ async def run_target_parallel(
 
 
 async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
-    job_store = app.bot_data["job_store"]
-    active_jobs = app.bot_data["active_jobs"]
-    settings = app.bot_data["settings"]
+    job_store = get_job_store(app)
+    active_jobs = get_active_jobs(app)
+    settings = get_settings(app)
 
-    if chat_id not in active_jobs:
+    runtime = active_jobs.get(chat_id)
+    if runtime is None:
         return
 
-    runtime = active_jobs[chat_id]
     job = job_store.get_job(job_id)
     if job is None:
         active_jobs.pop(chat_id, None)
         return
 
-    server_total = len(app.bot_data["store"].list_servers())
+    server_total = len(get_store(app).list_servers())
     job_store.set_running(job_id)
 
     live_msg = CompactQueueLiveMessage(
@@ -104,7 +118,6 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
         mode_label=MODE_QUANTUMMUX if job.mode == MODE_QUANTUMMUX else MODE_TUN_BIP,
         show_counters=(job.mode == MODE_QUANTUMMUX),
     )
-
     await live_msg.start()
 
     stopped = False
@@ -145,11 +158,11 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
         active_jobs.pop(chat_id, None)
 
         if failed:
-            final_status = "failed"
+            final_status = job_store.STATUS_FAILED
         elif stopped:
-            final_status = "stopped"
+            final_status = job_store.STATUS_STOPPED
         else:
-            final_status = "completed"
+            final_status = job_store.STATUS_COMPLETED
 
         job_store.update_job_status(job_id, final_status)
         await live_msg.finish_queue(stopped=stopped)
@@ -158,13 +171,13 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
         if final_job is not None:
             all_results: dict[str, dict] = {}
             for batch in final_job.completed_batches:
-                for res in batch.results:
-                    key = f"{batch.target}_{res.get('server_id', 'unknown')}"
-                    all_results[key] = res
+                for result in batch.results:
+                    key = f"{batch.target}_{result.get('server_id', 'unknown')}"
+                    all_results[key] = result
 
             summary = summarize_results(all_results, final_job.mode)
             if len(summary) <= 3500:
                 await app.bot.send_message(chat_id=chat_id, text=summary)
             else:
-                for i in range(0, len(summary), 3500):
-                    await app.bot.send_message(chat_id=chat_id, text=summary[i : i + 3500])
+                for index in range(0, len(summary), 3500):
+                    await app.bot.send_message(chat_id=chat_id, text=summary[index : index + 3500])

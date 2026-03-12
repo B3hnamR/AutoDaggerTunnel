@@ -80,7 +80,8 @@ class DaggerSshTester:
                     f"[retry] transient_error detected. attempt {attempt}/{attempts} "
                     f"-> next retry in {backoff:.1f}s"
                 )
-            await asyncio.sleep(backoff)
+            if not await self._sleep_with_stop(stop_event, backoff):
+                return self._cancelled_result(server, target_addr)
 
         return last_result or self._setup_error_result(server, target_addr, "unknown_retry_failure")
 
@@ -96,14 +97,7 @@ class DaggerSshTester:
         conn: Optional[asyncssh.SSHClientConnection] = None
 
         try:
-            conn = await asyncssh.connect(
-                server.host,
-                port=server.port,
-                username=server.username,
-                password=server.password,
-                known_hosts=None,
-                connect_timeout=self.settings.ssh_connect_timeout,
-            )
+            conn = await self._connect(server)
         except Exception as exc:  # noqa: BLE001
             return self._ssh_error_result(server, target_addr, f"ssh_connect_failed: {self._compact_error(exc)}")
 
@@ -245,7 +239,8 @@ class DaggerSshTester:
                     f"[retry] transient_error detected. attempt {attempt}/{attempts} "
                     f"-> next retry in {backoff:.1f}s"
                 )
-            await asyncio.sleep(backoff)
+            if not await self._sleep_with_stop(stop_event, backoff):
+                return self._cancelled_result(server, target_addr)
 
         return last_result or self._setup_error_result(server, target_addr, "unknown_retry_failure")
 
@@ -260,14 +255,7 @@ class DaggerSshTester:
         conn: Optional[asyncssh.SSHClientConnection] = None
 
         try:
-            conn = await asyncssh.connect(
-                server.host,
-                port=server.port,
-                username=server.username,
-                password=server.password,
-                known_hosts=None,
-                connect_timeout=self.settings.ssh_connect_timeout,
-            )
+            conn = await self._connect(server)
         except Exception as exc:  # noqa: BLE001
             return self._ssh_error_result(server, target_addr, f"ssh_connect_failed: {self._compact_error(exc)}")
 
@@ -389,7 +377,7 @@ class DaggerSshTester:
     async def _run_preflight(self, conn: asyncssh.SSHClientConnection, *, mode: str) -> None:
         await self._require_root(conn)
 
-        required_commands = {"bash", "install", "mkdir", "systemctl", "wget", "df"}
+        required_commands = {"bash", "install", "mkdir", "systemctl", "df"}
         if mode == "quantummux":
             required_commands.update({"ip", "journalctl"})
         elif mode == "tun_bip":
@@ -406,6 +394,10 @@ class DaggerSshTester:
                 "ROOT_FREE=$(df -m / | awk 'NR==2 {print $4}')",
                 "if [[ -n \"$ROOT_FREE\" ]] && [[ \"$ROOT_FREE\" -lt 50 ]]; then",
                 "  echo 'insufficient_disk_space: less than 50MB free on /' >&2",
+                "  exit 1",
+                "fi",
+                "if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then",
+                "  echo 'preflight_missing_downloader: wget_or_curl' >&2",
                 "  exit 1",
                 "fi",
                 "mkdir -p /etc/DaggerConnect",
@@ -433,13 +425,35 @@ class DaggerSshTester:
         script = "\n".join(
             [
                 "set -euo pipefail",
-                f"wget -q -O /tmp/DaggerConnect {shlex.quote(self.settings.dagger_binary_url)}",
+                "if command -v wget >/dev/null 2>&1; then",
+                f"  wget -q --tries=2 --timeout=20 -O /tmp/DaggerConnect {shlex.quote(self.settings.dagger_binary_url)}",
+                "elif command -v curl >/dev/null 2>&1; then",
+                f"  curl -fsSL --connect-timeout 20 --retry 2 --retry-delay 1 -o /tmp/DaggerConnect {shlex.quote(self.settings.dagger_binary_url)}",
+                "else",
+                "  echo 'missing downloader: wget/curl' >&2",
+                "  exit 127",
+                "fi",
                 "install -m 0755 /tmp/DaggerConnect /usr/local/bin/DaggerConnect",
                 "rm -f /tmp/DaggerConnect",
                 "mkdir -p /etc/DaggerConnect",
             ]
         )
         await self._run_script(conn, script)
+
+    async def _connect(self, server: ServerRecord) -> asyncssh.SSHClientConnection:
+        return await asyncssh.connect(
+            server.host,
+            port=server.port,
+            username=server.username,
+            password=server.password,
+            known_hosts=None,
+            connect_timeout=self.settings.ssh_connect_timeout,
+            login_timeout=self.settings.ssh_connect_timeout,
+            keepalive_interval=self.settings.ssh_keepalive_interval,
+            keepalive_count_max=self.settings.ssh_keepalive_count_max,
+            client_keys=None,
+            preferred_auth=("password", "keyboard-interactive"),
+        )
 
     async def _detect_quantummux_hints(self, conn: asyncssh.SSHClientConnection) -> Dict[str, str]:
         script = "\n".join(
@@ -526,6 +540,18 @@ class DaggerSshTester:
 
     def _is_stopped(self, stop_event: Optional[asyncio.Event]) -> bool:
         return bool(stop_event is not None and stop_event.is_set())
+
+    async def _sleep_with_stop(self, stop_event: Optional[asyncio.Event], seconds: float) -> bool:
+        if seconds <= 0:
+            return True
+        if stop_event is None:
+            await asyncio.sleep(seconds)
+            return True
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=seconds)
+            return False
+        except asyncio.TimeoutError:
+            return True
 
     def _cancelled_result(
         self,
@@ -640,29 +666,44 @@ async def run_ssh_connectivity_check(
     username: str,
     password: str,
     connect_timeout: int,
+    max_retries: int = 2,
+    retry_backoff_seconds: float = 1.0,
+    keepalive_interval: int = 15,
+    keepalive_count_max: int = 3,
 ) -> tuple[bool, str]:
     """Tests SSH connectivity securely with timeout bounds and cleans up the connection immediately."""
-    conn: Optional[asyncssh.SSHClientConnection] = None
-    try:
-        conn = await asyncssh.connect(
-            host,
-            port=port,
-            username=username,
-            password=password,
-            known_hosts=None,
-            connect_timeout=connect_timeout,
-        )
-        await conn.run("true", check=True, timeout=max(3, connect_timeout))
-        return True, "ssh_connection_successful"
-    except Exception as exc:  # noqa: BLE001
-        text = str(exc).strip().replace("\n", " | ")
-        compact_error_str = text[:280] if text else exc.__class__.__name__
-        return False, compact_error_str
-    finally:
-        if conn is not None:
-            conn.close()
-            try:
-                await conn.wait_closed()
-            except Exception:
-                pass
+    attempts = max(1, max_retries)
+    last_error = "unknown_ssh_error"
 
+    for attempt in range(1, attempts + 1):
+        conn: Optional[asyncssh.SSHClientConnection] = None
+        try:
+            conn = await asyncssh.connect(
+                host,
+                port=port,
+                username=username,
+                password=password,
+                known_hosts=None,
+                connect_timeout=connect_timeout,
+                login_timeout=connect_timeout,
+                keepalive_interval=keepalive_interval,
+                keepalive_count_max=keepalive_count_max,
+                client_keys=None,
+                preferred_auth=("password", "keyboard-interactive"),
+            )
+            await conn.run("true", check=True, timeout=max(3, connect_timeout))
+            return True, "ssh_connection_successful"
+        except Exception as exc:  # noqa: BLE001
+            text = str(exc).strip().replace("\n", " | ")
+            last_error = text[:280] if text else exc.__class__.__name__
+            if attempt < attempts:
+                await asyncio.sleep(max(0.1, retry_backoff_seconds * attempt))
+        finally:
+            if conn is not None:
+                conn.close()
+                try:
+                    await conn.wait_closed()
+                except Exception:
+                    pass
+
+    return False, last_error

@@ -3,7 +3,6 @@
 import asyncio
 import re
 import time
-from dataclasses import dataclass
 from typing import Optional
 
 from telegram import Update
@@ -12,6 +11,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from ..db import JobStore
 from ..models import JobRecord, ServerRecord
+from ..runtime import ActiveJobContext, get_active_jobs, get_job_store
 from ..ssh_runner import ServerTestResult, TestStatus
 from ..utils.ui import (
     BTN_STOP,
@@ -38,23 +38,6 @@ TEST_TRANSPORT, TEST_TARGET = range(10, 12)
 MODE_QUANTUMMUX = "quantummux"
 MODE_TUN_BIP = "tun_bip"
 ATTEMPT_RE = re.compile(r"attempt #(\d+)", re.IGNORECASE)
-
-
-@dataclass
-class ActiveJobContext:
-    job_id: str
-    chat_id: int
-    mode: str
-    stop_event: asyncio.Event
-    task: Optional[asyncio.Task] = None
-
-
-def get_job_store(context: ContextTypes.DEFAULT_TYPE) -> JobStore:
-    return context.application.bot_data["job_store"]
-
-
-def get_active_jobs(context: ContextTypes.DEFAULT_TYPE) -> dict[int, ActiveJobContext]:
-    return context.application.bot_data["active_jobs"]
 
 
 def serialize_result(result: ServerTestResult) -> dict:
