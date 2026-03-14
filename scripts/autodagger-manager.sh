@@ -12,7 +12,9 @@ SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 REPO_URL="${AUTO_DAGGER_REPO_URL:-https://github.com/B3hnamR/AutoDaggerTunnel.git}"
 REPO_BRANCH="${AUTO_DAGGER_BRANCH:-main}"
 
-DAGGER_BINARY_URL_DEFAULT="https://github.com/itsFLoKi/daggerConnect/releases/download/v1.5.1/DaggerConnect"
+REPO_OWNER="${AUTO_DAGGER_REPO_OWNER:-B3hnamR}"
+REPO_NAME="${AUTO_DAGGER_REPO_NAME:-AutoDaggerTunnel}"
+DAGGER_BINARY_URL_DEFAULT="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/DaggerConnect"
 
 print_banner() {
   clear

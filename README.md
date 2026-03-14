@@ -82,6 +82,7 @@ During manager setup:
 - SSH connect timeout
 - SSH command timeout
 - DaggerConnect binary URL
+  - Default: `https://raw.githubusercontent.com/B3hnamR/AutoDaggerTunnel/main/DaggerConnect`
 
 ## Runtime paths
 

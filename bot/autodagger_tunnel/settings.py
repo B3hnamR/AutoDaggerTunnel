@@ -95,6 +95,6 @@ def load_settings() -> Settings:
         ssh_retry_backoff_seconds=_parse_float("SSH_RETRY_BACKOFF_SECONDS", 1.5),
         dagger_binary_url=os.getenv(
             "DAGGER_BINARY_URL",
-            "https://github.com/itsFLoKi/daggerConnect/releases/download/v1.5.1/DaggerConnect",
+            "https://raw.githubusercontent.com/B3hnamR/AutoDaggerTunnel/main/DaggerConnect",
         ).strip(),
     )
