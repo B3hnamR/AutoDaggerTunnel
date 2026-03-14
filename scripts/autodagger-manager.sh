@@ -16,13 +16,161 @@ REPO_OWNER="${AUTO_DAGGER_REPO_OWNER:-B3hnamR}"
 REPO_NAME="${AUTO_DAGGER_REPO_NAME:-AutoDaggerTunnel}"
 DAGGER_BINARY_URL_DEFAULT="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/DaggerConnect"
 
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_CYAN=$'\033[36m'
+else
+  C_RESET=""
+  C_BOLD=""
+  C_DIM=""
+  C_RED=""
+  C_GREEN=""
+  C_YELLOW=""
+  C_CYAN=""
+fi
+
+hr() {
+  printf '%s\n' "------------------------------------------------------------"
+}
+
+press_enter() {
+  read -r -p "Press Enter to continue..." _
+}
+
+service_brief_state() {
+  if ! systemctl list-unit-files "${APP_NAME}.service" >/dev/null 2>&1; then
+    printf '%s' "not-installed"
+    return
+  fi
+
+  if systemctl is-active --quiet "${APP_NAME}.service"; then
+    printf '%s' "active"
+    return
+  fi
+
+  if systemctl is-enabled --quiet "${APP_NAME}.service" 2>/dev/null; then
+    printf '%s' "inactive"
+  else
+    printf '%s' "disabled"
+  fi
+}
+
+count_csv_ids() {
+  local raw="$1"
+  local count=0
+  local item=""
+  local -a items=()
+  IFS=',' read -r -a items <<<"${raw}"
+  for item in "${items[@]}"; do
+    item="$(echo "${item}" | xargs)"
+    [[ -n "${item}" ]] && count=$((count + 1))
+  done
+  printf '%s' "${count}"
+}
+
+get_env_value() {
+  local key="$1"
+  local default="${2:-}"
+  local line=""
+  local val=""
+
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    printf '%s' "${default}"
+    return
+  fi
+
+  line="$(grep -E "^${key}=" "${ENV_FILE}" | tail -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    printf '%s' "${default}"
+    return
+  fi
+
+  val="${line#*=}"
+  val="${val%\"}"
+  val="${val#\"}"
+  val="${val//\\\"/\"}"
+  val="${val//\\\\/\\}"
+  printf '%s' "${val}"
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local escaped=""
+  escaped="$(env_escape "${value}")"
+
+  mkdir -p "${INSTALL_DIR}"
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    touch "${ENV_FILE}"
+    chmod 600 "${ENV_FILE}"
+  fi
+
+  if grep -qE "^${key}=" "${ENV_FILE}"; then
+    sed -i "s|^${key}=.*|${key}=\"${escaped}\"|" "${ENV_FILE}"
+  else
+    printf '%s="%s"\n' "${key}" "${escaped}" >> "${ENV_FILE}"
+  fi
+}
+
+normalize_ids_csv() {
+  local raw="$1"
+  local seen=","
+  local -a cleaned=()
+  local -a items=()
+  local id=""
+
+  IFS=',' read -r -a items <<<"${raw}"
+  for id in "${items[@]}"; do
+    id="$(echo "${id}" | xargs)"
+    [[ -z "${id}" ]] && continue
+    [[ ! "${id}" =~ ^-?[0-9]+$ ]] && continue
+    if [[ "${seen}" == *",${id},"* ]]; then
+      continue
+    fi
+    cleaned+=("${id}")
+    seen="${seen}${id},"
+  done
+
+  local IFS=','
+  printf '%s' "${cleaned[*]}"
+}
+
 print_banner() {
+  local svc_state mode ids ids_count mode_view state_view
   clear
-  echo "=============================================="
-  echo "         AutoDaggerTunnel Manager"
-  echo "=============================================="
+  svc_state="$(service_brief_state)"
+  mode="$(get_env_value "ACCESS_MODE" "-")"
+  ids="$(get_env_value "ALLOWED_USER_IDS" "")"
+  ids_count="$(count_csv_ids "${ids}")"
+
+  if [[ "${svc_state}" == "active" ]]; then
+    state_view="${C_GREEN}${svc_state}${C_RESET}"
+  elif [[ "${svc_state}" == "inactive" || "${svc_state}" == "disabled" ]]; then
+    state_view="${C_YELLOW}${svc_state}${C_RESET}"
+  else
+    state_view="${C_RED}${svc_state}${C_RESET}"
+  fi
+
+  if [[ "${mode}" == "private" ]]; then
+    mode_view="${C_YELLOW}private (${ids_count} ids)${C_RESET}"
+  elif [[ "${mode}" == "public" ]]; then
+    mode_view="${C_GREEN}public${C_RESET}"
+  else
+    mode_view="${C_DIM}-${C_RESET}"
+  fi
+
+  echo "${C_BOLD}${C_CYAN}AutoDaggerTunnel Manager${C_RESET}"
+  hr
   echo "Install dir : ${INSTALL_DIR}"
   echo "Repo        : ${REPO_URL} (${REPO_BRANCH})"
+  echo "Service     : ${state_view}"
+  echo "Access mode : ${mode_view}"
+  hr
   echo
 }
 
@@ -230,7 +378,7 @@ install_or_update() {
 reconfigure_only() {
   if [[ ! -d "${APP_DIR}" ]]; then
     echo "[ERROR] App is not installed yet. Run Install/Update first."
-    read -r -p "Press Enter to continue..." _
+    press_enter
     return
   fi
 
@@ -243,10 +391,115 @@ reconfigure_only() {
   fi
 }
 
+manage_private_ids() {
+  local access_mode current_ids ids_to_add ids_to_remove updated_ids
+  local item remove_map ans
+  local -a keep_list=()
+  local -a items=()
+
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    echo "[ERROR] Config file not found. Install or Reconfigure first."
+    press_enter
+    return
+  fi
+
+  access_mode="$(get_env_value "ACCESS_MODE" "public")"
+  if [[ "${access_mode}" != "private" ]]; then
+    echo "[WARN] Bot is currently in public mode."
+    read -r -p "Switch to private mode now? [y/N]: " ans
+    if [[ "${ans}" =~ ^[Yy]$ ]]; then
+      set_env_value "ACCESS_MODE" "private"
+      access_mode="private"
+      echo "[OK] Access mode set to private."
+    else
+      press_enter
+      return
+    fi
+  fi
+
+  while true; do
+    current_ids="$(normalize_ids_csv "$(get_env_value "ALLOWED_USER_IDS" "")")"
+    echo
+    hr
+    echo "${C_BOLD}Private Mode - Allowed Telegram IDs${C_RESET}"
+    hr
+    if [[ -n "${current_ids}" ]]; then
+      echo "Current IDs: ${current_ids}"
+    else
+      echo "Current IDs: (empty)"
+    fi
+    echo
+    echo "1) Add ID(s)"
+    echo "2) Remove ID(s)"
+    echo "3) Restart bot service"
+    echo "4) Back"
+    echo
+
+    read -r -p "Select [1-4]: " choice
+    case "${choice}" in
+      1)
+        read -r -p "Enter ID(s) to add (comma separated): " ids_to_add
+        if ! validate_ids "${ids_to_add}"; then
+          echo "[ERROR] Invalid format. Example: 123456,7891011"
+          press_enter
+          continue
+        fi
+        updated_ids="$(normalize_ids_csv "${current_ids},${ids_to_add}")"
+        set_env_value "ALLOWED_USER_IDS" "${updated_ids}"
+        echo "[OK] IDs updated: ${updated_ids}"
+        ;;
+      2)
+        if [[ -z "${current_ids}" ]]; then
+          echo "[WARN] Allowed IDs list is already empty."
+          press_enter
+          continue
+        fi
+
+        read -r -p "Enter ID(s) to remove (comma separated): " ids_to_remove
+        if ! validate_ids "${ids_to_remove}"; then
+          echo "[ERROR] Invalid format. Example: 123456,7891011"
+          press_enter
+          continue
+        fi
+
+        ids_to_remove="$(normalize_ids_csv "${ids_to_remove}")"
+        remove_map=",${ids_to_remove},"
+        IFS=',' read -r -a items <<<"${current_ids}"
+        for item in "${items[@]}"; do
+          item="$(echo "${item}" | xargs)"
+          [[ -z "${item}" ]] && continue
+          if [[ "${remove_map}" == *",${item},"* ]]; then
+            continue
+          fi
+          keep_list+=("${item}")
+        done
+        updated_ids="$(normalize_ids_csv "$(IFS=','; echo "${keep_list[*]}")")"
+        set_env_value "ALLOWED_USER_IDS" "${updated_ids}"
+        if [[ -n "${updated_ids}" ]]; then
+          echo "[OK] IDs updated: ${updated_ids}"
+        else
+          echo "[WARN] Allowed IDs list is now empty."
+        fi
+        ;;
+      3)
+        systemctl restart "${APP_NAME}.service"
+        echo "[OK] Service restarted."
+        ;;
+      4)
+        return
+        ;;
+      *)
+        echo "Invalid option."
+        ;;
+    esac
+    press_enter
+  done
+}
+
 update_bot_only() {
   if [[ ! -d "${APP_DIR}/.git" ]]; then
     echo "[ERROR] App is not installed yet. Run Install / Update first."
-    read -r -p "Press Enter to continue..." _
+    press_enter
     return
   fi
 
@@ -268,7 +521,7 @@ update_bot_only() {
 
   after_ref="$(git -C "${APP_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
   echo "[OK] Bot updated and restarted. Commit: ${before_ref} -> ${after_ref}"
-  read -r -p "Press Enter to continue..." _
+  press_enter
 }
 
 start_service() {
@@ -288,7 +541,7 @@ restart_service() {
 
 status_service() {
   systemctl status "${APP_NAME}.service" --no-pager || true
-  read -r -p "Press Enter to continue..." _
+  press_enter
 }
 
 logs_service() {
@@ -299,7 +552,7 @@ logs_service() {
 show_current_config() {
   if [[ ! -f "${ENV_FILE}" ]]; then
     echo "[INFO] No config file found."
-    read -r -p "Press Enter to continue..." _
+    press_enter
     return
   fi
 
@@ -312,7 +565,7 @@ show_current_config() {
     fi
   done < "${ENV_FILE}"
 
-  read -r -p "Press Enter to continue..." _
+  press_enter
 }
 
 uninstall_bot() {
@@ -321,7 +574,7 @@ uninstall_bot() {
   read -r -p "Are you absolutely sure you want to uninstall? [y/N]: " ans
   if [[ ! "${ans}" =~ ^[Yy]$ ]]; then
     echo "Uninstall aborted."
-    read -r -p "Press Enter to continue..." _
+    press_enter
     return
   fi
 
@@ -344,35 +597,39 @@ uninstall_bot() {
 main_menu() {
   while true; do
     print_banner
-    echo "1) Install / Update"
-    echo "2) Reconfigure bot"
-    echo "3) Start bot"
-    echo "4) Stop bot"
-    echo "5) Restart bot"
-    echo "6) Service status"
-    echo "7) Live logs"
-    echo "8) Show current config"
-    echo "9) Update bot now (pull + restart)"
-    echo "10) Uninstall bot"
-    echo "11) Exit"
+    echo "${C_BOLD}Main Menu${C_RESET}"
+    hr
+    echo " 1) Install / Update"
+    echo " 2) Reconfigure bot"
+    echo " 3) Manage private allowed IDs"
+    echo " 4) Start bot"
+    echo " 5) Stop bot"
+    echo " 6) Restart bot"
+    echo " 7) Service status"
+    echo " 8) Live logs"
+    echo " 9) Show current config"
+    echo "10) Update bot now (pull + restart)"
+    echo "11) Uninstall bot"
+    echo "12) Exit"
     echo
 
-    read -r -p "Select [1-11]: " choice
+    read -r -p "Select [1-12]: " choice
     case "${choice}" in
       1) install_or_update ;;
       2) reconfigure_only ;;
-      3) start_service ; read -r -p "Press Enter to continue..." _ ;;
-      4) stop_service ; read -r -p "Press Enter to continue..." _ ;;
-      5) restart_service ; read -r -p "Press Enter to continue..." _ ;;
-      6) status_service ;;
-      7) logs_service ;;
-      8) show_current_config ;;
-      9) update_bot_only ;;
-      10) uninstall_bot ;;
-      11) exit 0 ;;
+      3) manage_private_ids ;;
+      4) start_service ; press_enter ;;
+      5) stop_service ; press_enter ;;
+      6) restart_service ; press_enter ;;
+      7) status_service ;;
+      8) logs_service ;;
+      9) show_current_config ;;
+      10) update_bot_only ;;
+      11) uninstall_bot ;;
+      12) exit 0 ;;
       *)
         echo "Invalid option."
-        read -r -p "Press Enter to continue..." _
+        press_enter
         ;;
     esac
   done
