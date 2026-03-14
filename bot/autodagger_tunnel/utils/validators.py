@@ -64,10 +64,12 @@ def parse_targets_input(raw: str) -> tuple[list[str], list[str]]:
 
 def parse_transport_choice(raw: str) -> Optional[str]:
     text = raw.strip().lower()
-    if text in {"1", "quantummux", "quantum", "qm", "q"}:
+    if text in {"1", "10", "quantummux", "quantum", "qm", "q"}:
         return "quantummux"
-    if text in {"2", "tun+bip", "tun + bip", "tun-bip", "tun", "bip"}:
+    if text in {"2", "9", "tun+bip", "tun + bip", "tun-bip", "tun", "bip"}:
         return "tun_bip"
+    if text in {"3", "11", "ghostmux", "ghost", "gm", "g"}:
+        return "ghostmux"
     return None
 
 

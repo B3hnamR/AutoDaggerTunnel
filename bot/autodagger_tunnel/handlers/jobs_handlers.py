@@ -16,6 +16,7 @@ from ..ssh_runner import ServerTestResult, TestStatus
 from ..utils.ui import (
     CB_JOB_STOP_PREFIX,
     CB_MODE_BACK,
+    CB_MODE_GHOSTMUX,
     CB_MODE_QUANTUMMUX,
     CB_MODE_TUN_BIP,
     CB_TEST_SERVER_ALL,
@@ -39,6 +40,7 @@ from .servers_handlers import check_access, get_store
 TEST_TRANSPORT, TEST_SERVER_SELECT, TEST_TARGET = range(10, 13)
 MODE_QUANTUMMUX = "quantummux"
 MODE_TUN_BIP = "tun_bip"
+MODE_GHOSTMUX = "ghostmux"
 ATTEMPT_RE = re.compile(r"attempt #(\d+)", re.IGNORECASE)
 
 
@@ -316,6 +318,8 @@ async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_T
             mode = MODE_QUANTUMMUX
         elif query.data == CB_MODE_TUN_BIP:
             mode = MODE_TUN_BIP
+        elif query.data == CB_MODE_GHOSTMUX:
+            mode = MODE_GHOSTMUX
         elif query.data == CB_MODE_BACK:
             await query.edit_message_text("Main menu:", reply_markup=MENU)
             return ConversationHandler.END
@@ -324,7 +328,7 @@ async def test_receive_transport(update: Update, context: ContextTypes.DEFAULT_T
 
     if mode is None:
         await update.effective_message.reply_text(
-            f"{ICON_WARN} Invalid mode. Send 1 for quantummux or 2 for tun+bip."
+            f"{ICON_WARN} Invalid mode. Send 1=quantummux, 2=tun+bip, 3=ghostmux."
         )
         return TEST_TRANSPORT
 

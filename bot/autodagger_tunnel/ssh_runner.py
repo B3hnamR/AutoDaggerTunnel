@@ -13,7 +13,7 @@ import asyncssh
 from .log_analyzer import AnalyzerSnapshot, DaggerLogAnalyzer
 from .models import ServerRecord
 from .settings import Settings
-from .templates import render_client_yaml, render_client_yaml_tun_bip, render_service_unit
+from .templates import render_client_yaml, render_client_yaml_ghostmux, render_client_yaml_tun_bip, render_service_unit
 
 OnLogLine = Callable[[str], Awaitable[None]]
 MAC_RE = re.compile(r"^(?i:[0-9a-f]{2}(?::[0-9a-f]{2}){5})$")
@@ -52,6 +52,7 @@ class DaggerSshTester:
         target_addr: str,
         psk: str,
         *,
+        transport: str = "quantummux",
         on_log_line: Optional[OnLogLine] = None,
         stop_event: Optional[asyncio.Event] = None,
     ) -> ServerTestResult:
@@ -66,6 +67,7 @@ class DaggerSshTester:
                 server,
                 target_addr,
                 psk,
+                transport=transport,
                 on_log_line=on_log_line,
                 stop_event=stop_event,
             )
@@ -91,6 +93,7 @@ class DaggerSshTester:
         target_addr: str,
         psk: str,
         *,
+        transport: str,
         on_log_line: Optional[OnLogLine],
         stop_event: Optional[asyncio.Event],
     ) -> ServerTestResult:
@@ -105,23 +108,36 @@ class DaggerSshTester:
             if self._is_stopped(stop_event):
                 return self._cancelled_result(server, target_addr)
 
-            await self._run_preflight(conn, mode="quantummux")
+            await self._run_preflight(conn, mode=transport)
             await self._install_dagger_binary(conn)
             qm_hints = await self._detect_quantummux_hints(conn)
 
             if self._is_stopped(stop_event):
                 return self._cancelled_result(server, target_addr)
 
-            await self._write_remote_file(
-                conn,
-                "/etc/DaggerConnect/client.yaml",
-                render_client_yaml(
+            if transport == "quantummux":
+                config_text = render_client_yaml(
                     target_addr,
                     psk,
                     interface=qm_hints["interface"],
                     local_ip=qm_hints["local_ip"],
                     router_mac=qm_hints["router_mac"],
-                ),
+                )
+            elif transport == "ghostmux":
+                config_text = render_client_yaml_ghostmux(
+                    target_addr,
+                    psk,
+                    interface=qm_hints["interface"],
+                    local_ip=qm_hints["local_ip"],
+                    router_mac=qm_hints["router_mac"],
+                )
+            else:
+                raise RuntimeError(f"unsupported_auto_log_transport: {transport}")
+
+            await self._write_remote_file(
+                conn,
+                "/etc/DaggerConnect/client.yaml",
+                config_text,
             )
             await self._write_remote_file(
                 conn,
@@ -378,10 +394,12 @@ class DaggerSshTester:
         await self._require_root(conn)
 
         required_commands = {"bash", "install", "mkdir", "systemctl", "df"}
-        if mode == "quantummux":
+        if mode in {"quantummux", "ghostmux"}:
             required_commands.update({"ip", "journalctl"})
         elif mode == "tun_bip":
             required_commands.update({"iptables"})
+        else:
+            raise RuntimeError(f"preflight_unsupported_mode: {mode}")
 
         missing = await self._find_missing_commands(conn, sorted(required_commands))
         if missing:

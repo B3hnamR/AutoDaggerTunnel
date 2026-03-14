@@ -50,7 +50,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "𝗪𝗼𝗿𝗸𝗳𝗹𝗼𝘄:\n"
         "1️⃣ Add your outbound servers via 'Server Management'.\n"
         "2️⃣ Click 'Start Tunnel Test'.\n"
-        "3️⃣ Select tunnel mode (QuantumMux or TUN+BIP).\n"
+        "3️⃣ Select tunnel mode (QuantumMux, GhostMux, or TUN+BIP).\n"
         "4️⃣ Enter your targets (e.g., 203.0.113.10:443).\n"
         "5️⃣ The bot runs tests automatically and provides a live status dashboard.\n"
     )

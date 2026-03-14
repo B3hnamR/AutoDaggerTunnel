@@ -21,6 +21,7 @@ from ..utils.ui import (
     CB_MENU_SERVERS,
     CB_MENU_TEST,
     CB_MODE_BACK,
+    CB_MODE_GHOSTMUX,
     CB_MODE_QUANTUMMUX,
     CB_MODE_TUN_BIP,
     CB_SERVER_ADD,
@@ -153,7 +154,10 @@ def register_handlers(app: Application) -> None:
         ],
         states={
             TEST_TRANSPORT: [
-                CallbackQueryHandler(test_receive_transport, pattern=rf"^({CB_MODE_QUANTUMMUX}|{CB_MODE_TUN_BIP}|{CB_MODE_BACK})$"),
+                CallbackQueryHandler(
+                    test_receive_transport,
+                    pattern=rf"^({CB_MODE_QUANTUMMUX}|{CB_MODE_TUN_BIP}|{CB_MODE_GHOSTMUX}|{CB_MODE_BACK})$",
+                ),
                 MessageHandler(STATE_TEXT_FILTER, test_receive_transport),
             ],
             TEST_SERVER_SELECT: [

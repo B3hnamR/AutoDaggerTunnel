@@ -11,7 +11,7 @@ from ..settings import Settings
 from ..ssh_runner import DaggerSshTester, ServerTestResult, summarize_results
 from ..models import ServerRecord
 from ..utils.ui import MENU, transport_label
-from .jobs_handlers import CompactQueueLiveMessage, MODE_QUANTUMMUX, MODE_TUN_BIP, serialize_result
+from .jobs_handlers import CompactQueueLiveMessage, MODE_GHOSTMUX, MODE_QUANTUMMUX, MODE_TUN_BIP, serialize_result
 
 logger = logging.getLogger(__name__)
 TEST_TIMEOUT_SECONDS = 3600
@@ -89,6 +89,7 @@ async def run_target_parallel(
                     server,
                     target_addr=target,
                     psk=settings.default_psk,
+                    transport=base_mode,
                     on_log_line=on_log_line,
                     stop_event=stop_event,
                 )
@@ -142,7 +143,7 @@ async def run_job_queue(app: Application, chat_id: int, job_id: str) -> None:
         target_total=len(job.targets),
         server_total=server_total,
         mode_label=transport_label(job.mode),
-        show_counters=(base_mode == MODE_QUANTUMMUX),
+        show_counters=(base_mode in {MODE_QUANTUMMUX, MODE_GHOSTMUX}),
     )
     await live_msg.start()
 

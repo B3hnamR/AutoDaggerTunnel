@@ -46,6 +46,7 @@ CB_SERVER_CHECK_PREFIX = "srv_chk_"
 
 CB_MODE_QUANTUMMUX = "mode_quantummux"
 CB_MODE_TUN_BIP = "mode_tun_bip"
+CB_MODE_GHOSTMUX = "mode_ghostmux"
 CB_MODE_BACK = "mode_back"
 
 CB_JOB_STOP_PREFIX = "job_stop:"
@@ -106,6 +107,7 @@ def build_transport_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("⚡️ 1) QuantumMux (Auto Log Check)", callback_data=CB_MODE_QUANTUMMUX)],
         [InlineKeyboardButton("🛡 2) TUN + BIP (Config Only)", callback_data=CB_MODE_TUN_BIP)],
+        [InlineKeyboardButton("👻 3) GhostMux (Auto Log Check)", callback_data=CB_MODE_GHOSTMUX)],
         [InlineKeyboardButton(f"{ICON_BACK} Back", callback_data=CB_MODE_BACK)],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -166,6 +168,8 @@ def build_server_carousel_keyboard(
 
 def transport_label(mode: str) -> str:
     base_mode = mode.split(":")[0] if ":" in mode else mode
+    if base_mode == "ghostmux":
+        return "GhostMux"
     if base_mode == "tun_bip":
         return "TUN + BIP"
     return "QuantumMux"

@@ -117,6 +117,113 @@ def render_client_yaml(
     return "\n".join(lines).strip() + "\n"
 
 
+def render_client_yaml_ghostmux(
+    addr: str,
+    psk: str,
+    *,
+    interface: str = "",
+    local_ip: str = "",
+    router_mac: str = "",
+) -> str:
+    addr = _yaml_escape(addr)
+    psk = _yaml_escape(psk)
+    interface = _yaml_escape(interface.strip())
+    local_ip = _yaml_escape(local_ip.strip())
+    router_mac = _yaml_escape(router_mac.strip())
+
+    lines = [
+        'mode: "client"',
+        f'psk: "{psk}"',
+        'profile: "latency"',
+        "verbose: true",
+        "heartbeat: 2",
+        "",
+        "paths:",
+        '  - transport: "ghostmux"',
+        f'    addr: "{addr}"',
+        "    connection_pool: 3",
+        "    aggressive_pool: true",
+        "    retry_interval: 1",
+        "    dial_timeout: 5",
+        "",
+        "ghostmux:",
+    ]
+
+    if interface:
+        lines.append(f'  interface: "{interface}"')
+    if local_ip:
+        lines.append(f'  local_ip: "{local_ip}"')
+    if router_mac:
+        lines.append(f'  router_mac: "{router_mac}"')
+
+    lines.extend(
+        [
+            '  decoy_cidr: "172.16.0.0/12"',
+            "  mtu: 1400",
+            "  snd_wnd: 4096",
+            "  rcv_wnd: 4096",
+            "  data_shard: 10",
+            "  parity_shard: 3",
+            "  ttl_base: 64",
+            "  ttl_jitter: 8",
+            "  idle_timeout: 90",
+            "",
+            "smux:",
+            "  keepalive: 8",
+            "  max_recv: 8388608",
+            "  max_stream: 8388608",
+            "  frame_size: 32768",
+            "  version: 2",
+            "",
+            "kcp:",
+            "  nodelay: 1",
+            "  interval: 10",
+            "  resend: 2",
+            "  nc: 1",
+            "  sndwnd: 1024",
+            "  rcvwnd: 1024",
+            "  mtu: 1400",
+            "",
+            "advanced:",
+            "  tcp_nodelay: true",
+            "  tcp_keepalive: 15",
+            "  tcp_read_buffer: 4194304",
+            "  tcp_write_buffer: 4194304",
+            "  websocket_read_buffer: 65536",
+            "  websocket_write_buffer: 65536",
+            "  websocket_compression: false",
+            "  cleanup_interval: 3",
+            "  session_timeout: 60",
+            "  connection_timeout: 30",
+            "  stream_timeout: 120",
+            "  max_connections: 2000",
+            "  max_udp_flows: 1000",
+            "  udp_flow_timeout: 300",
+            "  udp_buffer_size: 4194304",
+            "",
+            "obfuscation:",
+            "  enabled: false",
+            "  min_padding: 16",
+            "  max_padding: 512",
+            "  min_delay_ms: 0",
+            "  max_delay_ms: 0",
+            "  burst_chance: 0.15",
+            "",
+            "http_mimic:",
+            '  fake_domain: "www.google.com"',
+            '  fake_path: "/search"',
+            '  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"',
+            "  chunked_encoding: false",
+            "  session_cookie: true",
+            "  custom_headers:",
+            '    - "Accept-Language: en-US,en;q=0.9"',
+            '    - "Accept-Encoding: gzip, deflate, br"',
+        ]
+    )
+
+    return "\n".join(lines).strip() + "\n"
+
+
 def render_client_yaml_tun_bip(addr: str, psk: str, *, dest_ip: str, health_port: int) -> str:
     addr = _yaml_escape(addr)
     psk = _yaml_escape(psk)

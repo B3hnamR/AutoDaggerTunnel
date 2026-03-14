@@ -51,6 +51,8 @@ class DaggerLogAnalyzer:
             self.failure_reason = "unstable_reconnect_pattern"
         if not self.failure_reason and self._is_reconnect_attempt_storm():
             self.failure_reason = "reconnect_attempt_storm_pattern"
+        if not self.failure_reason and self._is_persistent_reconnect_loop():
+            self.failure_reason = "persistent_reconnect_loop_pattern"
 
     def is_failure(self) -> bool:
         return bool(self.failure_reason)
@@ -71,5 +73,10 @@ class DaggerLogAnalyzer:
 
     def _is_reconnect_attempt_storm(self) -> bool:
         if self.connected_count == 0 and self.reconnect_count >= 8 and self.max_reconnect_attempt >= 8:
+            return True
+        return False
+
+    def _is_persistent_reconnect_loop(self) -> bool:
+        if self.reconnect_count >= 10 and self.disconnected_count >= 8 and self.max_reconnect_attempt >= 8:
             return True
         return False
